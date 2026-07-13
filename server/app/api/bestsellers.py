@@ -11,7 +11,7 @@ router = APIRouter(prefix="/api/v1/bestsellers", tags=["bestsellers"])
 def sources(db: Session = Depends(get_db)):
     service = BestsellerService(db)
     active = set(service.active_sources())
-    return [SourceOut(source="yes24", label="YES24 기준", enabled="yes24" in active), SourceOut(source="aladin", label="알라딘 기준", enabled="aladin" in active)]
+    return [SourceOut(source="yes24", label="YES24 기준", enabled="yes24" in active, categories=service.source_categories("yes24")), SourceOut(source="aladin", label="알라딘 기준", enabled="aladin" in active, categories=service.source_categories("aladin"))]
 
 @router.get("/categories", response_model=list[str])
 def categories(db: Session = Depends(get_db)):
@@ -35,4 +35,5 @@ async def refresh(x_admin_token: str | None = Header(default=None), source: str 
     if settings.admin_token and x_admin_token != settings.admin_token:
         raise HTTPException(status_code=403, detail="Forbidden")
     return await BestsellerService(db).refresh(source)
+
 

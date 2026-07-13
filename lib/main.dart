@@ -1614,15 +1614,24 @@ class _PurchasePageState extends State<PurchasePage> {
     super.dispose();
   }
 
+  List<String> get _availableCategories {
+    for (final source in sources) {
+      if (source.source == selectedSource && source.categories.isNotEmpty) {
+        return source.categories;
+      }
+    }
+    return categories.isEmpty ? const ['종합'] : categories;
+  }
+
   Future<void> _loadInitial() async {
     setState(() => loading = true);
     try {
       sources = await widget.state.purchaseApi.sources();
       categories = await widget.state.purchaseApi.categories();
       selectedSource = sources.isNotEmpty ? sources.first.source : '';
-      selectedCategory = categories.contains(selectedCategory)
+      selectedCategory = _availableCategories.contains(selectedCategory)
           ? selectedCategory
-          : categories.first;
+          : _availableCategories.first;
       await _loadBestsellers();
       final book = widget.initialBook;
       if (book != null) {
@@ -1739,6 +1748,9 @@ class _PurchasePageState extends State<PurchasePage> {
             selected: {selectedSource},
             onSelectionChanged: (value) async {
               selectedSource = value.first;
+              selectedCategory = _availableCategories.contains(selectedCategory)
+                  ? selectedCategory
+                  : _availableCategories.first;
               await _loadBestsellers();
             },
           ),
@@ -1749,7 +1761,7 @@ class _PurchasePageState extends State<PurchasePage> {
             labelText: '카테고리',
             border: OutlineInputBorder(),
           ),
-          items: categories
+          items: _availableCategories
               .map((e) => DropdownMenuItem(value: e, child: Text(e)))
               .toList(),
           onChanged: (value) async {
@@ -1809,35 +1821,18 @@ class _PurchasePageState extends State<PurchasePage> {
           )
         else
           ...bestsellers.map(
-            (book) => Card(
-              child: ListTile(
-                leading: Badge(
-                  label: Text('${book.rank}'),
-                  child: const Icon(Icons.menu_book),
-                ),
-                title: Text(
-                  book.title,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                subtitle: Text(
-                  '${book.author}\n${book.publisher} · ${book.isbn13.isEmpty ? book.isbn10 : book.isbn13}',
-                ),
-                onTap: () => _loadOffers(
-                  isbn13: book.isbn13,
-                  isbn10: book.isbn10,
-                  title: book.title,
-                  author: book.author,
-                ),
-                trailing: IconButton(
-                  tooltip: sourceLabel,
-
-                  icon: const Icon(Icons.open_in_new),
-                  onPressed: book.productUrl.isEmpty
-                      ? null
-                      : () => widget.state.links.openWebsite(book.productUrl),
-                ),
+            (book) => _BestsellerBookCard(
+              book: book,
+              sourceLabel: sourceLabel,
+              onSelect: () => _loadOffers(
+                isbn13: book.isbn13,
+                isbn10: book.isbn10,
+                title: book.title,
+                author: book.author,
               ),
+              onOpenSource: book.productUrl.isEmpty
+                  ? null
+                  : () => widget.state.links.openWebsite(book.productUrl),
             ),
           ),
         const InfoCard(
@@ -1846,6 +1841,111 @@ class _PurchasePageState extends State<PurchasePage> {
               'YES24는 공식 베스트셀러 RSS와 외부 이동만 제공합니다. 알라딘은 Open API에서 제공되는 범위의 가격과 상품 정보를 표시합니다. 교보문고는 외부 검색 이동만 제공합니다.',
         ),
       ],
+    );
+  }
+}
+
+class _BestsellerBookCard extends StatelessWidget {
+  const _BestsellerBookCard({
+    required this.book,
+    required this.sourceLabel,
+    required this.onSelect,
+    required this.onOpenSource,
+  });
+
+  final BestsellerBook book;
+  final String sourceLabel;
+  final VoidCallback onSelect;
+  final VoidCallback? onOpenSource;
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      child: InkWell(
+        borderRadius: BorderRadius.circular(8),
+        onTap: onSelect,
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(6),
+                    child: SizedBox(
+                      width: 58,
+                      height: 86,
+                      child: book.coverUrl.isEmpty
+                          ? const _BookCoverPlaceholder()
+                          : Image.network(
+                              book.coverUrl,
+                              fit: BoxFit.cover,
+                              errorBuilder: (_, _, _) =>
+                                  const _BookCoverPlaceholder(),
+                            ),
+                    ),
+                  ),
+                  Positioned(
+                    left: -6,
+                    top: -6,
+                    child: Badge(
+                      label: Text('${book.rank}'),
+                      backgroundColor: Theme.of(context).colorScheme.primary,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      book.title,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.titleMedium,
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      [
+                        if (book.author.isNotEmpty) book.author,
+                        if (book.publisher.isNotEmpty) book.publisher,
+                      ].join(' · '),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      book.isbn13.isEmpty ? book.isbn10 : book.isbn13,
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                  ],
+                ),
+              ),
+              IconButton(
+                tooltip: sourceLabel,
+                icon: const Icon(Icons.open_in_new),
+                onPressed: onOpenSource,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _BookCoverPlaceholder extends StatelessWidget {
+  const _BookCoverPlaceholder();
+
+  @override
+  Widget build(BuildContext context) {
+    return ColoredBox(
+      color: Theme.of(context).colorScheme.surfaceContainerHighest,
+      child: const Center(child: Icon(Icons.menu_book_outlined)),
     );
   }
 }

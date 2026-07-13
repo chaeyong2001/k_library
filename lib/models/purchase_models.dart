@@ -3,15 +3,21 @@ class BestsellerSource {
     required this.source,
     required this.label,
     required this.enabled,
+    this.categories = const [],
   });
   final String source;
   final String label;
   final bool enabled;
+  final List<String> categories;
   factory BestsellerSource.fromJson(Map<String, dynamic> json) =>
       BestsellerSource(
         source: '${json['source'] ?? ''}',
         label: '${json['label'] ?? json['source'] ?? ''}',
         enabled: json['enabled'] == true,
+        categories: (json['categories'] as List? ?? const [])
+            .map((e) => '$e')
+            .where((e) => e.trim().isNotEmpty)
+            .toList(),
       );
 }
 

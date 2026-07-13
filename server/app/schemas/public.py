@@ -66,3 +66,6 @@ class SourceOut(BaseModel):
     source: str
     label: str
     enabled: bool
+    categories: list[str] = []
+
+
