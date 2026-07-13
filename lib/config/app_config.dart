@@ -1,6 +1,9 @@
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 
+import 'local_dev_config.dart' as local_dev;
+
 class AppConfig {
+  static const bool _isReleaseBuild = bool.fromEnvironment('dart.vm.product');
   static const String _definedAuthKey = String.fromEnvironment(
     'DATA4LIBRARY_AUTH_KEY',
   );
@@ -8,9 +11,22 @@ class AppConfig {
 
   static String get data4LibraryAuthKey {
     final fromDefine = _definedAuthKey.trim();
+    if (_isReleaseBuild && fromDefine.isNotEmpty) {
+      throw StateError(
+        'Release builds must not include DATA4LIBRARY_AUTH_KEY in the Flutter app. Remove the direct key before producing APK/AAB.',
+      );
+    }
     if (fromDefine.isNotEmpty) return fromDefine;
-    return (dotenv.maybeGet('DATA4LIBRARY_AUTH_KEY', fallback: '') ?? '')
-        .trim();
+
+    final fromDotEnv = _dotenvValue('DATA4LIBRARY_AUTH_KEY');
+    if (_isReleaseBuild && fromDotEnv.isNotEmpty) {
+      throw StateError(
+        'Release builds must not load DATA4LIBRARY_AUTH_KEY from .env. Remove the key before producing APK/AAB.',
+      );
+    }
+    if (fromDotEnv.isNotEmpty) return fromDotEnv;
+
+    return _localDevData4LibraryAuthKey;
   }
 
   static bool get hasApiKey => data4LibraryAuthKey.isNotEmpty;
@@ -30,27 +46,64 @@ class AppConfig {
   static String get purchaseApiBaseUrl {
     final fromDefine = _definedPurchaseBaseUrl.trim();
     if (fromDefine.isNotEmpty) return _trimSlash(fromDefine);
-    try {
-      return _trimSlash(
-        (dotenv.maybeGet('PURCHASE_API_BASE_URL', fallback: '') ?? '').trim(),
-      );
-    } catch (_) {
-      return '';
-    }
+
+    final fromDotEnv = _dotenvValue('PURCHASE_API_BASE_URL');
+    if (fromDotEnv.isNotEmpty) return _trimSlash(fromDotEnv);
+
+    return _trimSlash(_localDevPurchaseApiBaseUrl);
   }
 
   static bool get purchaseEnabled {
     final raw = _definedPurchaseEnabled.trim().isNotEmpty
         ? _definedPurchaseEnabled
-        : (() {
-            try {
-              return dotenv.maybeGet('ENABLE_PURCHASE_TAB', fallback: 'true') ??
-                  'true';
-            } catch (_) {
-              return 'true';
-            }
-          })();
+        : _firstNonEmpty([
+            _dotenvValue('ENABLE_PURCHASE_TAB'),
+            _localDevEnablePurchaseTab,
+            'true',
+          ]);
     return !['false', '0', 'no'].contains(raw.toLowerCase());
+  }
+
+  static String get _localDevData4LibraryAuthKey {
+    var value = '';
+    assert(() {
+      value = local_dev.localDevData4LibraryAuthKey.trim();
+      return true;
+    }());
+    return value;
+  }
+
+  static String get _localDevPurchaseApiBaseUrl {
+    var value = '';
+    assert(() {
+      value = local_dev.localDevPurchaseApiBaseUrl.trim();
+      return true;
+    }());
+    return value;
+  }
+
+  static String get _localDevEnablePurchaseTab {
+    var value = '';
+    assert(() {
+      value = local_dev.localDevEnablePurchaseTab.trim();
+      return true;
+    }());
+    return value;
+  }
+
+  static String _dotenvValue(String key) {
+    try {
+      return (dotenv.maybeGet(key, fallback: '') ?? '').trim();
+    } catch (_) {
+      return '';
+    }
+  }
+
+  static String _firstNonEmpty(List<String> values) {
+    for (final value in values) {
+      if (value.trim().isNotEmpty) return value.trim();
+    }
+    return '';
   }
 
   static String _trimSlash(String value) =>

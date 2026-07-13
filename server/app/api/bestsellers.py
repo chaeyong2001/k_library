@@ -32,6 +32,7 @@ def list_by_source(source: str, category: str | None = None, page: int = 1, page
 @router.post("/refresh")
 async def refresh(x_admin_token: str | None = Header(default=None), source: str | None = None, db: Session = Depends(get_db)):
     settings = get_settings()
-    if settings.admin_refresh_token and x_admin_token != settings.admin_refresh_token:
+    if settings.admin_token and x_admin_token != settings.admin_token:
         raise HTTPException(status_code=403, detail="Forbidden")
     return await BestsellerService(db).refresh(source)
+

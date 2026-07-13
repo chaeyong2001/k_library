@@ -4,13 +4,9 @@
 
 ## API 키 연결
 
-소스에는 키를 넣지 않습니다. 실행 시 Dart define으로 전달합니다.
+개발 중에는 `lib/config/local_dev_config.dart`에 로컬 전용 정보나루 키를 입력한 뒤 `flutter run`만 실행합니다. 이 파일은 `.gitignore` 처리되어 저장소에 올리지 않습니다.
 
-```powershell
-flutter run --dart-define=DATA4LIBRARY_AUTH_KEY=YOUR_DATA4LIBRARY_AUTH_KEY
-```
-
-이 PC에는 `run_with_api.ps1`과 `.env`가 로컬 전용으로 생성되어 있으며 `.gitignore` 처리되어 있습니다.
+기존 `--dart-define=DATA4LIBRARY_AUTH_KEY=...` 방식도 debug/profile 개발 실행에서는 유지됩니다. Release/AAB에서는 Flutter 앱에 정보나루 키를 직접 포함하지 않도록 차단합니다.
 
 ## 구현된 실제 API 흐름
 
@@ -32,4 +28,30 @@ flutter run --dart-define=DATA4LIBRARY_AUTH_KEY=YOUR_DATA4LIBRARY_AUTH_KEY
 - 도서관 홈페이지, 전화, 길찾기 외부 이동
 - 즐겨찾기, 최근 본 책, 최근 검색어 로컬 저장
 
-책 구매, 서점 연결, 제휴, 가격비교, 비공식 로그인, HTML 스크래핑, 예약 자동화는 포함하지 않습니다.
+비공식 로그인, HTML 스크래핑, 예약 자동화는 포함하지 않습니다. 구매 옵션은 공식 API 또는 외부 판매처 이동으로만 제공합니다.
+## 개발 실행 설정
+
+개발·APK 실기기 테스트 단계에서는 `flutter run`만으로 실행할 수 있도록 로컬 개발 설정 파일을 사용합니다.
+
+1. `lib/config/local_dev_config.example.dart`를 참고합니다.
+2. 같은 폴더의 `lib/config/local_dev_config.dart`에 개발용 정보나루 키를 직접 입력합니다.
+3. Railway 구매 API 주소 기본값은 `https://k-library-api-production.up.railway.app`입니다.
+4. `local_dev_config.dart`는 `.gitignore`에 포함되어야 하며 저장소에 올리지 않습니다.
+
+개발 중 실행:
+
+```powershell
+flutter run
+```
+
+기존 방식도 유지됩니다. 우선순위는 다음과 같습니다.
+
+1. `--dart-define`
+2. `.env`
+3. `lib/config/local_dev_config.dart`
+
+Release/AAB에서는 local dev 값이 assert-only 경로로 제거되며, `.env`도 Flutter asset에 포함하지 않습니다. 출시 전에는 `docs/release_security_checklist.md`를 확인하세요.
+
+주의: `ALADIN_TTB_KEY`, `DATABASE_URL`, `ADMIN_SYNC_KEY` 같은 Railway 서버 전용 값은 Flutter 코드나 `--dart-define`에 넣지 않습니다.
+
+

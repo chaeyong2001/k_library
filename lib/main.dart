@@ -16,8 +16,19 @@ import 'storage/local_store.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await dotenv.load(fileName: '.env', isOptional: true);
+  await _loadDebugDotEnv();
   runApp(const KLibraryApp());
+}
+
+Future<void> _loadDebugDotEnv() async {
+  var shouldLoad = false;
+  assert(() {
+    shouldLoad = true;
+    return true;
+  }());
+  if (shouldLoad) {
+    await dotenv.load(fileName: '.env', isOptional: true);
+  }
 }
 
 class KLibraryApp extends StatelessWidget {
@@ -756,7 +767,8 @@ class SettingsPage extends StatelessWidget {
         ),
         const InfoCard(
           title: '제외된 기능',
-          body: '책 구매, 서점 연결, 제휴, 가격비교, 비공식 로그인, 스크래핑, 예약 자동화는 포함하지 않습니다.',
+          body:
+              '비공식 로그인, 스크래핑, 예약 자동화는 포함하지 않습니다. 구매 옵션은 공식 API 또는 외부 판매처 이동으로만 제공합니다.',
         ),
       ],
     );
@@ -1591,7 +1603,7 @@ class _PurchasePageState extends State<PurchasePage> {
     if (book != null) {
       queryController.text = book.isbn.isNotEmpty
           ? book.isbn
-          : '${book.title} ${book.author}';
+          : '${book.title} ${book.author}'.trim();
     }
     unawaited(_loadInitial());
   }
@@ -1637,7 +1649,9 @@ class _PurchasePageState extends State<PurchasePage> {
     bestsellers = result.$1;
     lastUpdated = result.$2;
     message = result.$3;
-    if (mounted) setState(() {});
+    if (mounted) {
+      setState(() {});
+    }
   }
 
   Future<void> _loadOffers({
@@ -1655,7 +1669,9 @@ class _PurchasePageState extends State<PurchasePage> {
     );
     offers = result.$1;
     message = result.$2;
-    if (mounted) setState(() => offerLoading = false);
+    if (mounted) {
+      setState(() => offerLoading = false);
+    }
   }
 
   @override
@@ -1674,17 +1690,28 @@ class _PurchasePageState extends State<PurchasePage> {
         children: const [
           StateBox(
             icon: Icons.settings_outlined,
-            title: '구매 서버 주소가 설정되지 않았습니다',
+            title: '구매 서버 주소가 설정되지 않았습니다.',
           ),
           InfoCard(
             title: '설정 필요',
             body:
-                'PURCHASE_API_BASE_URL을 Railway 서버 주소로 입력하면 베스트셀러와 가격 조회가 활성화됩니다.',
+                'PURCHASE_API_BASE_URL을 Railway 서버 주소로 입력하면 구매 옵션과 베스트셀러가 활성화됩니다.',
           ),
         ],
       );
     }
     if (loading) return const Center(child: CircularProgressIndicator());
+    final pricedOffers = offers.where((offer) => offer.isPriced).toList();
+    final externalLinks = offers
+        .where((offer) => offer.isExternalLink)
+        .toList();
+    var sourceLabel = '베스트셀러';
+    for (final source in sources) {
+      if (source.source == selectedSource) {
+        sourceLabel = source.label;
+        break;
+      }
+    }
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
       children: [
@@ -1697,7 +1724,7 @@ class _PurchasePageState extends State<PurchasePage> {
             IconButton(
               onPressed: () => _loadOffers(title: queryController.text),
               icon: const Icon(Icons.manage_search),
-              tooltip: '가격 조회',
+              tooltip: '구매 옵션 확인',
             ),
           ],
         ),
@@ -1734,11 +1761,9 @@ class _PurchasePageState extends State<PurchasePage> {
         ),
         const SizedBox(height: 10),
         InfoCard(
-          title: selectedSource.isEmpty
-              ? '베스트셀러'
-              : '${selectedSource.toUpperCase()} 기준 베스트셀러',
+          title: sourceLabel,
           body:
-              '마지막 갱신: ${lastUpdated == null ? '확인 필요' : lastUpdated!.toLocal().toString().substring(0, 16)}\n가격·배송비·재고·혜택은 결제 전 판매처에서 최종 확인해 주세요.',
+              '마지막 갱신: ${lastUpdated == null ? '확인 필요' : lastUpdated!.toLocal().toString().substring(0, 16)}\n가격, 재고, 배송비, 혜택은 변경될 수 있으며 결제 전 판매처에서 최종 확인해야 합니다.',
         ),
         if (message.isNotEmpty) MessageCard(message: message),
         if (offerLoading)
@@ -1749,35 +1774,38 @@ class _PurchasePageState extends State<PurchasePage> {
             ),
           ),
         if (offers.isNotEmpty) ...[
-          const SectionHeader(title: '판매처별 가격'),
-          ...offers.map(
-            (offer) => Card(
-              child: ListTile(
-                leading: const Icon(Icons.storefront_outlined),
-                title: Text(
-                  offer.merchantName.isEmpty
-                      ? offer.provider
-                      : offer.merchantName,
-                ),
-                subtitle: Text(
-                  '${offer.productName}\n${offer.shippingFee == null ? '배송비 별도 확인' : '배송비 ${offer.shippingFee}원'} · ${offer.matchedBy}',
-                ),
-                trailing: Text(
-                  offer.totalPrice == null ? '확인 필요' : '${offer.totalPrice}원',
-                ),
-                onTap: offer.productUrl.isEmpty
-                    ? null
-                    : () => widget.state.links.openWebsite(offer.productUrl),
+          const SectionHeader(title: '구매 옵션'),
+          if (pricedOffers.isNotEmpty)
+            ...pricedOffers.map(
+              (offer) => _PurchaseOfferTile(
+                offer: offer,
+                openUrl: widget.state.links.openWebsite,
               ),
             ),
+          if (externalLinks.isNotEmpty)
+            ...externalLinks.map(
+              (offer) => _PurchaseOfferTile(
+                offer: offer,
+                openUrl: widget.state.links.openWebsite,
+              ),
+            ),
+          const InfoCard(
+            title: '판매처 안내',
+            body:
+                '이 앱은 각 판매처의 공식 앱이나 공식 제휴 앱이 아닙니다. 외부 판매처로 이동하면 해당 업체의 정책이 적용됩니다.',
           ),
           const SizedBox(height: 16),
         ],
         const SectionHeader(title: '베스트셀러'),
-        if (bestsellers.isEmpty)
+        if (sources.isEmpty)
           const StateBox(
             icon: Icons.menu_book_outlined,
-            title: '베스트셀러 데이터가 없습니다',
+            title: '베스트셀러 데이터 소스 준비 중입니다.',
+          )
+        else if (bestsellers.isEmpty)
+          const StateBox(
+            icon: Icons.menu_book_outlined,
+            title: '베스트셀러 데이터가 없습니다.',
           )
         else
           ...bestsellers.map(
@@ -1802,7 +1830,8 @@ class _PurchasePageState extends State<PurchasePage> {
                   author: book.author,
                 ),
                 trailing: IconButton(
-                  tooltip: '판매처 페이지',
+                  tooltip: sourceLabel,
+
                   icon: const Icon(Icons.open_in_new),
                   onPressed: book.productUrl.isEmpty
                       ? null
@@ -1814,11 +1843,69 @@ class _PurchasePageState extends State<PurchasePage> {
         const InfoCard(
           title: '데이터 출처 안내',
           body:
-              '이 앱은 YES24·알라딘·판매처의 공식 앱 또는 제휴 앱이 아닙니다. 외부 판매처로 이동하면 해당 업체의 정책이 적용됩니다.',
+              'YES24는 공식 베스트셀러 RSS와 외부 이동만 제공합니다. 알라딘은 Open API에서 제공되는 범위의 가격과 상품 정보를 표시합니다. 교보문고는 외부 검색 이동만 제공합니다.',
         ),
       ],
     );
   }
+}
+
+class _PurchaseOfferTile extends StatelessWidget {
+  const _PurchaseOfferTile({required this.offer, required this.openUrl});
+  final PurchaseOffer offer;
+  final Future<void> Function(String url) openUrl;
+
+  @override
+  Widget build(BuildContext context) {
+    final priceText = offer.isPriced
+        ? '${_formatWon(offer.price)}원'
+        : offer.message.isNotEmpty
+        ? offer.message
+        : '가격은 판매처에서 확인';
+    final originalText = offer.originalPrice == null
+        ? ''
+        : '정가 ${_formatWon(offer.originalPrice)}원';
+    final fetchedText = offer.fetchedAt == null
+        ? '조회 시각 확인 필요'
+        : '조회 ${offer.fetchedAt!.toLocal().toString().substring(0, 16)}';
+    return Card(
+      child: ListTile(
+        leading: const Icon(Icons.storefront_outlined),
+        title: Text(offer.label),
+        subtitle: Text(
+          [
+            if (offer.productName.isNotEmpty) offer.productName,
+            priceText,
+            if (originalText.isNotEmpty) originalText,
+            if (offer.isPriced) fetchedText,
+            offer.matchedBy,
+          ].join('\n'),
+        ),
+        isThreeLine: true,
+        trailing: FilledButton.tonalIcon(
+          onPressed: offer.productUrl.isEmpty
+              ? null
+              : () => openUrl(offer.productUrl),
+          icon: const Icon(Icons.open_in_new),
+          label: Text(offer.actionText),
+        ),
+      ),
+    );
+  }
+}
+
+String _formatWon(int? value) {
+  if (value == null) return '-';
+  final text = value.toString();
+  final buffer = StringBuffer();
+  for (var i = 0; i < text.length; i++) {
+    final remaining = text.length - i;
+    buffer.write(text[i]);
+    if (remaining > 1 && remaining % 3 == 1) {
+      buffer.write(',');
+    }
+  }
+  return buffer.toString();
 }
 
 class LoanAlertSection extends StatelessWidget {

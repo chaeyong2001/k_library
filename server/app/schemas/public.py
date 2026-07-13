@@ -1,5 +1,6 @@
 ﻿from datetime import datetime
-from pydantic import BaseModel, Field, HttpUrl
+from pydantic import BaseModel
+
 
 class BestsellerItemOut(BaseModel):
     source: str
@@ -18,6 +19,7 @@ class BestsellerItemOut(BaseModel):
     collected_at: datetime
     ranking_date: str
 
+
 class BestsellerResponse(BaseModel):
     active_sources: list[str]
     selected_source: str | None
@@ -27,11 +29,17 @@ class BestsellerResponse(BaseModel):
     cached: bool = True
     safe_message: str = ""
 
+
 class OfferOut(BaseModel):
     provider: str
     merchant_name: str
     product_name: str
     isbn13: str = ""
+    offer_type: str = "priced_offer"
+    source_type: str = "priced"
+    display_name: str = ""
+    description: str = ""
+    action_label: str = ""
     price: int | None = None
     original_price: int | None = None
     shipping_fee: int | None = None
@@ -41,7 +49,10 @@ class OfferOut(BaseModel):
     availability: str = "확인 필요"
     product_type: str = "book"
     matched_by: str = "매칭 확인 필요"
+    message: str = ""
+    category: str = ""
     fetched_at: datetime
+
 
 class OfferResponse(BaseModel):
     query: dict
@@ -49,6 +60,7 @@ class OfferResponse(BaseModel):
     cached: bool = False
     stale: bool = False
     safe_message: str = ""
+
 
 class SourceOut(BaseModel):
     source: str

@@ -1,5 +1,6 @@
-﻿from dataclasses import dataclass
+﻿from dataclasses import dataclass, field
 from datetime import datetime, timezone
+
 
 @dataclass
 class Offer:
@@ -7,6 +8,11 @@ class Offer:
     merchant_name: str
     product_name: str
     isbn13: str = ""
+    offer_type: str = "priced_offer"
+    source_type: str = "priced"
+    display_name: str = ""
+    description: str = ""
+    action_label: str = ""
     price: int | None = None
     original_price: int | None = None
     shipping_fee: int | None = None
@@ -16,8 +22,18 @@ class Offer:
     availability: str = "확인 필요"
     product_type: str = "book"
     matched_by: str = "매칭 확인 필요"
-    fetched_at: datetime = datetime.now(timezone.utc)
+    message: str = ""
+    category: str = ""
+    fetched_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+
 
 class ShoppingProvider:
-    async def search(self, *, isbn13: str = "", isbn10: str = "", title: str = "", author: str = "") -> list[Offer]:
+    async def search(
+        self,
+        *,
+        isbn13: str = "",
+        isbn10: str = "",
+        title: str = "",
+        author: str = "",
+    ) -> list[Offer]:
         raise NotImplementedError

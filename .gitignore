@@ -1,4 +1,4 @@
-# Miscellaneous
+﻿# Miscellaneous
 *.class
 *.log
 *.pyc
@@ -53,4 +53,8 @@ app.*.map.json
 
 # Local API run helpers
 run_with_api.ps1
+
+# Local Flutter development config
+lib/config/local_dev_config.dart
+!lib/config/local_dev_config.example.dart
 
