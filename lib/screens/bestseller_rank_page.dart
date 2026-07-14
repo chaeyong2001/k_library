@@ -7,6 +7,8 @@ import '../services/purchase_api.dart';
 import '../services/services.dart';
 import 'book_purchase_detail_page.dart';
 
+enum BestsellerRankingMode { genre, readerTarget }
+
 class BestsellerRankPage extends StatefulWidget {
   const BestsellerRankPage({
     required this.purchaseApi,
@@ -14,6 +16,7 @@ class BestsellerRankPage extends StatefulWidget {
     required this.source,
     required this.sourceLabel,
     required this.title,
+    required this.rankingMode,
     this.contentType = 'physical_book',
     this.category = '',
     this.readerTarget = '',
@@ -25,6 +28,7 @@ class BestsellerRankPage extends StatefulWidget {
   final String source;
   final String sourceLabel;
   final String title;
+  final BestsellerRankingMode rankingMode;
   final String contentType;
   final String category;
   final String readerTarget;
@@ -39,6 +43,16 @@ class _BestsellerRankPageState extends State<BestsellerRankPage> {
   String message = '';
   bool loading = true;
 
+  String get _requestKey {
+    final mode = widget.rankingMode == BestsellerRankingMode.genre
+        ? 'genre'
+        : 'reader_target';
+    final value = widget.rankingMode == BestsellerRankingMode.genre
+        ? (widget.category.isEmpty ? 'all' : widget.category)
+        : (widget.readerTarget.isEmpty ? 'all' : widget.readerTarget);
+    return '${widget.source}:${widget.contentType}:$mode:$value';
+  }
+
   @override
   void initState() {
     super.initState();
@@ -51,11 +65,15 @@ class _BestsellerRankPageState extends State<BestsellerRankPage> {
       final result = await widget.purchaseApi.bestsellers(
         source: widget.source,
         contentType: widget.contentType,
-        category: widget.category,
-        readerTarget: widget.readerTarget,
+        category: widget.rankingMode == BestsellerRankingMode.genre
+            ? widget.category
+            : '',
+        readerTarget: widget.rankingMode == BestsellerRankingMode.readerTarget
+            ? widget.readerTarget
+            : '',
         pageSize: 50,
       );
-      books = result.$1;
+      books = _dedupeAndSort(result.$1);
       lastUpdated = result.$2;
       message = result.$3;
     } catch (_) {
@@ -80,18 +98,27 @@ class _BestsellerRankPageState extends State<BestsellerRankPage> {
 
   @override
   Widget build(BuildContext context) {
+    final category = widget.rankingMode == BestsellerRankingMode.genre
+        ? widget.category
+        : '';
+    final readerTarget =
+        widget.rankingMode == BestsellerRankingMode.readerTarget
+        ? widget.readerTarget
+        : '';
     return Scaffold(
       appBar: AppBar(title: Text(widget.title)),
       body: RefreshIndicator(
         onRefresh: _load,
         child: ListView(
+          key: PageStorageKey(_requestKey),
           padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
           children: [
             InfoSummary(
               sourceLabel: widget.sourceLabel,
+              rankingMode: widget.rankingMode,
               contentType: widget.contentType,
-              category: widget.category,
-              readerTarget: widget.readerTarget,
+              category: category,
+              readerTarget: readerTarget,
               lastUpdated: lastUpdated,
             ),
             if (message.isNotEmpty)
@@ -131,6 +158,7 @@ class _BestsellerRankPageState extends State<BestsellerRankPage> {
 class InfoSummary extends StatelessWidget {
   const InfoSummary({
     required this.sourceLabel,
+    required this.rankingMode,
     required this.contentType,
     required this.category,
     required this.readerTarget,
@@ -139,6 +167,7 @@ class InfoSummary extends StatelessWidget {
   });
 
   final String sourceLabel;
+  final BestsellerRankingMode rankingMode;
   final String contentType;
   final String category;
   final String readerTarget;
@@ -146,16 +175,16 @@ class InfoSummary extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final filters = [
-      if (category.isNotEmpty) '장르: $category',
-      if (readerTarget.isNotEmpty) '독자 대상: $readerTarget',
-    ].join(' · ');
+    final typeLabel = contentType == 'ebook' ? '전자책' : '종이책';
+    final filter = rankingMode == BestsellerRankingMode.genre
+        ? '장르: ${category.isEmpty ? '전체' : category}'
+        : '독자 대상: ${readerTarget.isEmpty ? '전체' : readerTarget}';
     return Card(
       child: ListTile(
         leading: const Icon(Icons.leaderboard_outlined),
         title: Text(sourceLabel),
         subtitle: Text(
-          '${contentType == 'ebook' ? '전자책' : '종이책'} · ${filters.isEmpty ? '전체' : filters}\n마지막 갱신: ${lastUpdated == null ? '확인 필요' : lastUpdated!.toLocal().toString().substring(0, 16)}',
+          '$typeLabel · $filter\n마지막 갱신: ${lastUpdated == null ? '확인 필요' : lastUpdated!.toLocal().toString().substring(0, 16)}',
         ),
       ),
     );
@@ -225,6 +254,10 @@ class _RankBookCard extends StatelessWidget {
                       overflow: TextOverflow.ellipsis,
                       style: Theme.of(context).textTheme.titleMedium,
                     ),
+                    if (book.contentType == 'ebook') ...[
+                      const SizedBox(height: 4),
+                      const Badge(label: Text('전자책')),
+                    ],
                     const SizedBox(height: 6),
                     Text(
                       [
@@ -288,4 +321,13 @@ class _RankStateBox extends StatelessWidget {
       ),
     );
   }
+}
+
+List<BestsellerBook> _dedupeAndSort(List<BestsellerBook> source) {
+  final unique = <String, BestsellerBook>{};
+  for (final book in source) {
+    unique.putIfAbsent(book.sourceItemKey, () => book);
+  }
+  final list = unique.values.toList()..sort((a, b) => a.rank.compareTo(b.rank));
+  return list;
 }

@@ -64,6 +64,13 @@ class BestsellerService:
         page_size: int,
     ):
         page_size = min(max(page_size, 1), self.settings.max_page_size)
+        category = (category or "").strip()
+        reader_target = (reader_target or "").strip()
+        if category == "전체":
+            category = ""
+        if reader_target == "전체":
+            reader_target = ""
+
         stmt = select(BestsellerItem)
         if source:
             stmt = stmt.where(BestsellerItem.source == source)
@@ -73,19 +80,35 @@ class BestsellerService:
                 return []
             stmt = stmt.where(BestsellerItem.source.in_(active))
         stmt = stmt.where(BestsellerItem.content_type == content_type)
-        if category and category != "전체":
-            stmt = stmt.where(BestsellerItem.category == category)
-        if reader_target and reader_target != "전체":
-            stmt = stmt.where(BestsellerItem.reader_target == reader_target)
-        stmt = stmt.order_by(
-            BestsellerItem.source,
-            BestsellerItem.content_type,
-            BestsellerItem.category,
-            BestsellerItem.reader_target,
-            BestsellerItem.ranking_date.desc(),
-            BestsellerItem.rank,
-        ).offset((page - 1) * page_size).limit(page_size)
-        return list(self.db.scalars(stmt).all())
+
+        if content_type == "physical_book":
+            if reader_target:
+                stmt = stmt.where(BestsellerItem.reader_target == reader_target)
+                if reader_target == "성인":
+                    stmt = stmt.where(BestsellerItem.category == (category or "종합"))
+            else:
+                stmt = stmt.where(BestsellerItem.reader_target == "성인")
+                stmt = stmt.where(BestsellerItem.category == (category or "종합"))
+        else:
+            stmt = stmt.where(BestsellerItem.category == (category or "종합"))
+
+        if content_type == "physical_book" and reader_target:
+            stmt = stmt.order_by(
+                BestsellerItem.source,
+                BestsellerItem.content_type,
+                BestsellerItem.reader_target,
+                BestsellerItem.ranking_date.desc(),
+                BestsellerItem.rank,
+            )
+        else:
+            stmt = stmt.order_by(
+                BestsellerItem.source,
+                BestsellerItem.content_type,
+                BestsellerItem.category,
+                BestsellerItem.ranking_date.desc(),
+                BestsellerItem.rank,
+            )
+        return list(self.db.scalars(stmt.offset((page - 1) * page_size).limit(page_size)).all())
 
     def last_success_at(self, source: str | None = None, content_type: str = "physical_book"):
         stmt = select(SyncRun).where(SyncRun.status == "success")

@@ -33,6 +33,7 @@ class BestsellerBook {
     required this.category,
     required this.rank,
     required this.title,
+    this.sourceItemId = '',
     this.contentType = 'physical_book',
     this.readerTarget = '미분류',
     this.author = '',
@@ -46,6 +47,7 @@ class BestsellerBook {
   });
   final String source;
   final String category;
+  final String sourceItemId;
   final String contentType;
   final String readerTarget;
   final int rank;
@@ -58,9 +60,18 @@ class BestsellerBook {
   final String productUrl;
   final DateTime? collectedAt;
   final String rankingDate;
+  String get sourceItemKey =>
+      '$source:$contentType:${sourceItemId.isNotEmpty
+          ? sourceItemId
+          : isbn13.isNotEmpty
+          ? isbn13
+          : isbn10.isNotEmpty
+          ? isbn10
+          : title}';
   factory BestsellerBook.fromJson(Map<String, dynamic> json) => BestsellerBook(
     source: '${json['source'] ?? ''}',
     category: '${json['category'] ?? '종합'}',
+    sourceItemId: '${json['source_item_id'] ?? ''}',
     contentType: '${json['content_type'] ?? 'physical_book'}',
     readerTarget: '${json['reader_target'] ?? '미분류'}',
     rank: _int(json['rank']) ?? 0,

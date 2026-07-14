@@ -1833,6 +1833,9 @@ class _PurchasePageState extends State<PurchasePage> {
           source: selectedSource,
           sourceLabel: _sourceLabel,
           title: '$titlePrefix 베스트셀러',
+          rankingMode: readerTarget
+              ? BestsellerRankingMode.readerTarget
+              : BestsellerRankingMode.genre,
           contentType: selectedContentType,
           category: readerTarget || filterName == allFilter ? '' : filterName,
           readerTarget: !readerTarget || filterName == allFilter
