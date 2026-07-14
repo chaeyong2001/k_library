@@ -6,6 +6,7 @@ class BestsellerItemOut(BaseModel):
     source: str
     source_item_id: str = ""
     category: str
+    reader_target: str = "미분류"
     rank: int
     previous_rank: int | None = None
     title: str
@@ -24,6 +25,7 @@ class BestsellerResponse(BaseModel):
     active_sources: list[str]
     selected_source: str | None
     category: str | None
+    reader_target: str | None = None
     items: list[BestsellerItemOut]
     last_success_at: datetime | None = None
     cached: bool = True
@@ -67,5 +69,4 @@ class SourceOut(BaseModel):
     label: str
     enabled: bool
     categories: list[str] = []
-
-
+    reader_targets: list[str] = []

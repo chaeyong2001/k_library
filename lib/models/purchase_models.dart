@@ -4,17 +4,23 @@ class BestsellerSource {
     required this.label,
     required this.enabled,
     this.categories = const [],
+    this.readerTargets = const [],
   });
   final String source;
   final String label;
   final bool enabled;
   final List<String> categories;
+  final List<String> readerTargets;
   factory BestsellerSource.fromJson(Map<String, dynamic> json) =>
       BestsellerSource(
         source: '${json['source'] ?? ''}',
         label: '${json['label'] ?? json['source'] ?? ''}',
         enabled: json['enabled'] == true,
         categories: (json['categories'] as List? ?? const [])
+            .map((e) => '$e')
+            .where((e) => e.trim().isNotEmpty)
+            .toList(),
+        readerTargets: (json['reader_targets'] as List? ?? const [])
             .map((e) => '$e')
             .where((e) => e.trim().isNotEmpty)
             .toList(),
@@ -27,6 +33,7 @@ class BestsellerBook {
     required this.category,
     required this.rank,
     required this.title,
+    this.readerTarget = '미분류',
     this.author = '',
     this.publisher = '',
     this.isbn13 = '',
@@ -38,6 +45,7 @@ class BestsellerBook {
   });
   final String source;
   final String category;
+  final String readerTarget;
   final int rank;
   final String title;
   final String author;
@@ -51,6 +59,7 @@ class BestsellerBook {
   factory BestsellerBook.fromJson(Map<String, dynamic> json) => BestsellerBook(
     source: '${json['source'] ?? ''}',
     category: '${json['category'] ?? '종합'}',
+    readerTarget: '${json['reader_target'] ?? '미분류'}',
     rank: _int(json['rank']) ?? 0,
     title: '${json['title'] ?? ''}',
     author: '${json['author'] ?? ''}',

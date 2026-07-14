@@ -36,7 +36,8 @@ class PurchaseApiClient {
 
   Future<(List<BestsellerBook>, DateTime?, String)> bestsellers({
     String source = '',
-    String category = '종합',
+    String category = '',
+    String readerTarget = '',
   }) async {
     if (!isConfigured) {
       return (const <BestsellerBook>[], null, '구매 서버 주소가 설정되지 않았습니다.');
@@ -44,6 +45,7 @@ class PurchaseApiClient {
     final data = await _get('/api/v1/bestsellers', {
       'source': source,
       'category': category,
+      'reader_target': readerTarget,
     });
     final map = Map<String, dynamic>.from(data as Map);
     final items = (map['items'] as List? ?? const [])

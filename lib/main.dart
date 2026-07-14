@@ -12,6 +12,7 @@ import 'repositories/library_repository.dart';
 import 'services/services.dart';
 import 'services/loan_alert_service.dart';
 import 'services/purchase_api.dart';
+import 'screens/book_purchase_detail_page.dart';
 import 'storage/local_store.dart';
 
 Future<void> main() async {
@@ -914,9 +915,10 @@ class _BookDetailPageState extends State<BookDetailPage> {
               FilledButton.icon(
                 onPressed: () => Navigator.of(context).push(
                   MaterialPageRoute(
-                    builder: (_) => PurchasePage(
-                      state: widget.state,
-                      initialBook: widget.book,
+                    builder: (_) => BookPurchaseDetailPage.fromBook(
+                      book: widget.book,
+                      purchaseApi: widget.state.purchaseApi,
+                      links: widget.state.links,
                     ),
                   ),
                 ),
@@ -1584,16 +1586,17 @@ class PurchasePage extends StatefulWidget {
 }
 
 class _PurchasePageState extends State<PurchasePage> {
+  static const allFilter = '전체';
+
   final queryController = TextEditingController();
   List<BestsellerSource> sources = const [];
   List<String> categories = const ['종합'];
   List<BestsellerBook> bestsellers = const [];
-  List<PurchaseOffer> offers = const [];
   String selectedSource = '';
-  String selectedCategory = '종합';
+  String selectedCategory = allFilter;
+  String selectedReaderTarget = allFilter;
   DateTime? lastUpdated;
   bool loading = true;
-  bool offerLoading = false;
   String message = '';
 
   @override
@@ -1617,10 +1620,27 @@ class _PurchasePageState extends State<PurchasePage> {
   List<String> get _availableCategories {
     for (final source in sources) {
       if (source.source == selectedSource && source.categories.isNotEmpty) {
-        return source.categories;
+        return _withAll(source.categories);
       }
     }
-    return categories.isEmpty ? const ['종합'] : categories;
+    return _withAll(categories.isEmpty ? const ['종합'] : categories);
+  }
+
+  List<String> get _availableReaderTargets {
+    for (final source in sources) {
+      if (source.source == selectedSource && source.readerTargets.isNotEmpty) {
+        return _withAll(source.readerTargets);
+      }
+    }
+    return const [allFilter];
+  }
+
+  List<String> _withAll(List<String> values) {
+    final filtered = values
+        .map((value) => value.trim())
+        .where((value) => value.isNotEmpty && value != allFilter)
+        .toList();
+    return [allFilter, ...filtered];
   }
 
   Future<void> _loadInitial() async {
@@ -1629,18 +1649,8 @@ class _PurchasePageState extends State<PurchasePage> {
       sources = await widget.state.purchaseApi.sources();
       categories = await widget.state.purchaseApi.categories();
       selectedSource = sources.isNotEmpty ? sources.first.source : '';
-      selectedCategory = _availableCategories.contains(selectedCategory)
-          ? selectedCategory
-          : _availableCategories.first;
+      _normalizeFiltersForSource();
       await _loadBestsellers();
-      final book = widget.initialBook;
-      if (book != null) {
-        await _loadOffers(
-          isbn13: book.isbn,
-          title: book.title,
-          author: book.author,
-        );
-      }
     } catch (_) {
       message = '구매 서버에 연결할 수 없습니다.';
     } finally {
@@ -1653,7 +1663,10 @@ class _PurchasePageState extends State<PurchasePage> {
   Future<void> _loadBestsellers() async {
     final result = await widget.state.purchaseApi.bestsellers(
       source: selectedSource,
-      category: selectedCategory,
+      category: selectedCategory == allFilter ? '' : selectedCategory,
+      readerTarget: selectedReaderTarget == allFilter
+          ? ''
+          : selectedReaderTarget,
     );
     bestsellers = result.$1;
     lastUpdated = result.$2;
@@ -1663,24 +1676,60 @@ class _PurchasePageState extends State<PurchasePage> {
     }
   }
 
-  Future<void> _loadOffers({
-    String isbn13 = '',
-    String isbn10 = '',
-    String title = '',
-    String author = '',
-  }) async {
-    setState(() => offerLoading = true);
-    final result = await widget.state.purchaseApi.offers(
-      isbn13: isbn13,
-      isbn10: isbn10,
-      title: title,
-      author: author,
-    );
-    offers = result.$1;
-    message = result.$2;
-    if (mounted) {
-      setState(() => offerLoading = false);
+  void _normalizeFiltersForSource() {
+    final genres = _availableCategories;
+    final targets = _availableReaderTargets;
+    if (!genres.contains(selectedCategory)) {
+      selectedCategory = allFilter;
     }
+    if (!targets.contains(selectedReaderTarget)) {
+      selectedReaderTarget = allFilter;
+    }
+  }
+
+  Future<void> _changeSource(String source) async {
+    selectedSource = source;
+    _normalizeFiltersForSource();
+    await _loadBestsellers();
+  }
+
+  Future<void> _changeCategory(String category) async {
+    selectedCategory = category;
+    await _loadBestsellers();
+  }
+
+  Future<void> _changeReaderTarget(String readerTarget) async {
+    selectedReaderTarget = readerTarget;
+    await _loadBestsellers();
+  }
+
+  void _openBestsellerDetail(BestsellerBook book) {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => BookPurchaseDetailPage.fromBestseller(
+          book: book,
+          purchaseApi: widget.state.purchaseApi,
+          links: widget.state.links,
+        ),
+      ),
+    );
+  }
+
+  void _openSearchDetail(String rawValue) {
+    final value = rawValue.trim();
+    if (value.isEmpty) return;
+    final isbn = value.replaceAll(RegExp(r'[^0-9Xx]'), '');
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => BookPurchaseDetailPage(
+          purchaseApi: widget.state.purchaseApi,
+          links: widget.state.links,
+          isbn13: isbn.length == 13 ? isbn : '',
+          isbn10: isbn.length == 10 ? isbn : '',
+          title: value,
+        ),
+      ),
+    );
   }
 
   @override
@@ -1710,10 +1759,6 @@ class _PurchasePageState extends State<PurchasePage> {
       );
     }
     if (loading) return const Center(child: CircularProgressIndicator());
-    final pricedOffers = offers.where((offer) => offer.isPriced).toList();
-    final externalLinks = offers
-        .where((offer) => offer.isExternalLink)
-        .toList();
     var sourceLabel = '베스트셀러';
     for (final source in sources) {
       if (source.source == selectedSource) {
@@ -1721,17 +1766,19 @@ class _PurchasePageState extends State<PurchasePage> {
         break;
       }
     }
+    final targetEnabled = _availableReaderTargets.length > 1;
     return ListView(
+      key: const PageStorageKey('purchase_bestseller_list'),
       padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
       children: [
         SearchBar(
           controller: queryController,
           hintText: 'ISBN, 제목, 저자로 구매 옵션 검색',
           leading: const Icon(Icons.search),
-          onSubmitted: (value) => _loadOffers(title: value),
+          onSubmitted: _openSearchDetail,
           trailing: [
             IconButton(
-              onPressed: () => _loadOffers(title: queryController.text),
+              onPressed: () => _openSearchDetail(queryController.text),
               icon: const Icon(Icons.manage_search),
               tooltip: '구매 옵션 확인',
             ),
@@ -1746,68 +1793,56 @@ class _PurchasePageState extends State<PurchasePage> {
                 )
                 .toList(),
             selected: {selectedSource},
-            onSelectionChanged: (value) async {
-              selectedSource = value.first;
-              selectedCategory = _availableCategories.contains(selectedCategory)
-                  ? selectedCategory
-                  : _availableCategories.first;
-              await _loadBestsellers();
-            },
+            onSelectionChanged: (value) =>
+                unawaited(_changeSource(value.first)),
           ),
         const SizedBox(height: 10),
-        DropdownButtonFormField<String>(
-          initialValue: selectedCategory,
-          decoration: const InputDecoration(
-            labelText: '카테고리',
-            border: OutlineInputBorder(),
-          ),
-          items: _availableCategories
-              .map((e) => DropdownMenuItem(value: e, child: Text(e)))
-              .toList(),
-          onChanged: (value) async {
-            if (value != null) {
-              selectedCategory = value;
-              await _loadBestsellers();
-            }
-          },
+        Row(
+          children: [
+            Expanded(
+              child: DropdownButtonFormField<String>(
+                initialValue: selectedCategory,
+                decoration: const InputDecoration(
+                  labelText: '장르별',
+                  border: OutlineInputBorder(),
+                ),
+                items: _availableCategories
+                    .map((e) => DropdownMenuItem(value: e, child: Text(e)))
+                    .toList(),
+                onChanged: (value) {
+                  if (value != null) unawaited(_changeCategory(value));
+                },
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: DropdownButtonFormField<String>(
+                initialValue: selectedReaderTarget,
+                decoration: const InputDecoration(
+                  labelText: '독자 대상',
+                  border: OutlineInputBorder(),
+                ),
+                items: _availableReaderTargets
+                    .map((e) => DropdownMenuItem(value: e, child: Text(e)))
+                    .toList(),
+                onChanged: targetEnabled
+                    ? (value) {
+                        if (value != null) {
+                          unawaited(_changeReaderTarget(value));
+                        }
+                      }
+                    : null,
+              ),
+            ),
+          ],
         ),
         const SizedBox(height: 10),
         InfoCard(
           title: sourceLabel,
           body:
-              '마지막 갱신: ${lastUpdated == null ? '확인 필요' : lastUpdated!.toLocal().toString().substring(0, 16)}\n가격, 재고, 배송비, 혜택은 변경될 수 있으며 결제 전 판매처에서 최종 확인해야 합니다.',
+              '마지막 갱신: ${lastUpdated == null ? '확인 필요' : lastUpdated!.toLocal().toString().substring(0, 16)}\n독자 대상은 구매자 연령 통계가 아니라 알라딘 카테고리 기준 분류입니다. 가격, 재고, 배송비, 혜택은 결제 전 판매처에서 최종 확인해야 합니다.',
         ),
         if (message.isNotEmpty) MessageCard(message: message),
-        if (offerLoading)
-          const Center(
-            child: Padding(
-              padding: EdgeInsets.all(20),
-              child: CircularProgressIndicator(),
-            ),
-          ),
-        if (offers.isNotEmpty) ...[
-          const SectionHeader(title: '구매 옵션'),
-          if (pricedOffers.isNotEmpty)
-            ...pricedOffers.map(
-              (offer) => _PurchaseOfferTile(
-                offer: offer,
-                openUrl: widget.state.links.openWebsite,
-              ),
-            ),
-          if (externalLinks.isNotEmpty)
-            ...externalLinks.map(
-              (offer) => _PurchaseOfferTile(
-                offer: offer,
-                openUrl: widget.state.links.openWebsite,
-              ),
-            ),
-          const InfoCard(
-            title: '판매처 안내',
-            body:
-                '이 앱은 각 판매처의 공식 앱이나 공식 제휴 앱이 아닙니다. 외부 판매처로 이동하면 해당 업체의 정책이 적용됩니다.',
-          ),
-          const SizedBox(height: 16),
-        ],
         const SectionHeader(title: '베스트셀러'),
         if (sources.isEmpty)
           const StateBox(
@@ -1817,19 +1852,14 @@ class _PurchasePageState extends State<PurchasePage> {
         else if (bestsellers.isEmpty)
           const StateBox(
             icon: Icons.menu_book_outlined,
-            title: '베스트셀러 데이터가 없습니다.',
+            title: '조건에 맞는 베스트셀러 데이터가 없습니다.',
           )
         else
           ...bestsellers.map(
             (book) => _BestsellerBookCard(
               book: book,
               sourceLabel: sourceLabel,
-              onSelect: () => _loadOffers(
-                isbn13: book.isbn13,
-                isbn10: book.isbn10,
-                title: book.title,
-                author: book.author,
-              ),
+              onSelect: () => _openBestsellerDetail(book),
               onOpenSource: book.productUrl.isEmpty
                   ? null
                   : () => widget.state.links.openWebsite(book.productUrl),
@@ -1948,64 +1978,6 @@ class _BookCoverPlaceholder extends StatelessWidget {
       child: const Center(child: Icon(Icons.menu_book_outlined)),
     );
   }
-}
-
-class _PurchaseOfferTile extends StatelessWidget {
-  const _PurchaseOfferTile({required this.offer, required this.openUrl});
-  final PurchaseOffer offer;
-  final Future<void> Function(String url) openUrl;
-
-  @override
-  Widget build(BuildContext context) {
-    final priceText = offer.isPriced
-        ? '${_formatWon(offer.price)}원'
-        : offer.message.isNotEmpty
-        ? offer.message
-        : '가격은 판매처에서 확인';
-    final originalText = offer.originalPrice == null
-        ? ''
-        : '정가 ${_formatWon(offer.originalPrice)}원';
-    final fetchedText = offer.fetchedAt == null
-        ? '조회 시각 확인 필요'
-        : '조회 ${offer.fetchedAt!.toLocal().toString().substring(0, 16)}';
-    return Card(
-      child: ListTile(
-        leading: const Icon(Icons.storefront_outlined),
-        title: Text(offer.label),
-        subtitle: Text(
-          [
-            if (offer.productName.isNotEmpty) offer.productName,
-            priceText,
-            if (originalText.isNotEmpty) originalText,
-            if (offer.isPriced) fetchedText,
-            offer.matchedBy,
-          ].join('\n'),
-        ),
-        isThreeLine: true,
-        trailing: FilledButton.tonalIcon(
-          onPressed: offer.productUrl.isEmpty
-              ? null
-              : () => openUrl(offer.productUrl),
-          icon: const Icon(Icons.open_in_new),
-          label: Text(offer.actionText),
-        ),
-      ),
-    );
-  }
-}
-
-String _formatWon(int? value) {
-  if (value == null) return '-';
-  final text = value.toString();
-  final buffer = StringBuffer();
-  for (var i = 0; i < text.length; i++) {
-    final remaining = text.length - i;
-    buffer.write(text[i]);
-    if (remaining > 1 && remaining % 3 == 1) {
-      buffer.write(',');
-    }
-  }
-  return buffer.toString();
 }
 
 class LoanAlertSection extends StatelessWidget {

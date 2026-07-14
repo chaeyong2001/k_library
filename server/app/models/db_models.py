@@ -3,8 +3,10 @@ from sqlalchemy import Boolean, DateTime, Integer, String, Text, UniqueConstrain
 from sqlalchemy.orm import Mapped, mapped_column
 from ..database import Base
 
+
 def now_utc() -> datetime:
     return datetime.now(timezone.utc)
+
 
 class BestsellerItem(Base):
     __tablename__ = "kl_bestseller_items"
@@ -12,6 +14,7 @@ class BestsellerItem(Base):
     source: Mapped[str] = mapped_column(String(32), index=True)
     source_item_id: Mapped[str] = mapped_column(String(160), default="")
     category: Mapped[str] = mapped_column(String(80), index=True, default="종합")
+    reader_target: Mapped[str] = mapped_column(String(40), index=True, default="미분류")
     rank: Mapped[int] = mapped_column(Integer, index=True)
     previous_rank: Mapped[int | None] = mapped_column(Integer, nullable=True)
     title: Mapped[str] = mapped_column(String(300))
@@ -26,9 +29,10 @@ class BestsellerItem(Base):
     collected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
 
     __table_args__ = (
-        UniqueConstraint("source", "category", "ranking_date", "rank", name="uq_kl_best_rank"),
-        Index("ix_kl_best_source_category_rank", "source", "category", "ranking_date", "rank"),
+        UniqueConstraint("source", "category", "reader_target", "ranking_date", "rank", name="uq_kl_best_rank"),
+        Index("ix_kl_best_source_category_reader_rank", "source", "category", "reader_target", "ranking_date", "rank"),
     )
+
 
 class SyncRun(Base):
     __tablename__ = "kl_sync_runs"
@@ -38,6 +42,7 @@ class SyncRun(Base):
     last_success_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_attempt_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
     safe_message: Mapped[str] = mapped_column(String(400), default="")
+
 
 class PurchaseOfferCache(Base):
     __tablename__ = "kl_purchase_offer_cache"
