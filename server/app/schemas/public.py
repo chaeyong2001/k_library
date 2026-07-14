@@ -67,6 +67,30 @@ class OfferResponse(BaseModel):
     safe_message: str = ""
 
 
+class FormatCandidateOut(BaseModel):
+    candidate_id: str
+    content_type: str
+    title: str
+    author: str = ""
+    publisher: str = ""
+    isbn13: str = ""
+    source_item_id: str = ""
+    cover_url: str = ""
+    price: int | None = None
+    original_price: int | None = None
+    product_url: str = ""
+    match_score: float = 0
+    match_reasons: list[str] = []
+
+
+class FormatCandidateResponse(BaseModel):
+    query_title: str = ""
+    normalized_title: str = ""
+    target_content_type: str = "physical_book"
+    candidates: list[FormatCandidateOut] = []
+    safe_message: str = ""
+
+
 class SourceOut(BaseModel):
     source: str
     label: str

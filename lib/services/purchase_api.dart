@@ -81,6 +81,7 @@ class PurchaseApiClient {
     String title = '',
     String author = '',
     String contentType = 'physical_book',
+    String sourceItemId = '',
   }) async {
     if (!isConfigured) {
       return (const <PurchaseOffer>[], '구매 서버 주소가 설정되지 않았습니다.', false);
@@ -91,6 +92,7 @@ class PurchaseApiClient {
       'title': title,
       'author': author,
       'content_type': contentType,
+      'source_item_id': sourceItemId,
     });
     final map = Map<String, dynamic>.from(data as Map);
     final offers = (map['offers'] as List? ?? const [])
@@ -98,6 +100,39 @@ class PurchaseApiClient {
         .map((e) => PurchaseOffer.fromJson(Map<String, dynamic>.from(e)))
         .toList();
     return (offers, '${map['safe_message'] ?? ''}', map['stale'] == true);
+  }
+
+  Future<(List<PurchaseFormatCandidate>, String)> formatCandidates({
+    String targetContentType = 'physical_book',
+    String title = '',
+    String author = '',
+    String publisher = '',
+    String isbn13 = '',
+    String isbn10 = '',
+    String sourceItemId = '',
+  }) async {
+    if (!isConfigured) {
+      return (const <PurchaseFormatCandidate>[], '구매 서버 주소가 설정되어 있지 않습니다.');
+    }
+    final data = await _get('/api/v1/purchase/format-candidates', {
+      'target_content_type': targetContentType,
+      'title': title,
+      'author': author,
+      'publisher': publisher,
+      'isbn13': isbn13,
+      'isbn10': isbn10,
+      'source_item_id': sourceItemId,
+    });
+    final map = Map<String, dynamic>.from(data as Map);
+    final candidates = (map['candidates'] as List? ?? const [])
+        .whereType<Map>()
+        .map(
+          (e) => PurchaseFormatCandidate.fromJson(
+            Map<String, dynamic>.from(e),
+          ),
+        )
+        .toList();
+    return (candidates, '${map['safe_message'] ?? ''}');
   }
 
   Future<Object> _get(

@@ -22,13 +22,22 @@ class AladinOfferProvider(ShoppingProvider):
         title: str = "",
         author: str = "",
         content_type: str = "physical_book",
+        source_item_id: str = "",
     ) -> list[Offer]:
         if not self.ttb_key:
             return []
+        if source_item_id:
+            by_item_id = await self._lookup(
+                source_item_id,
+                item_id_type="ItemId",
+                content_type=content_type,
+            )
+            if by_item_id:
+                return by_item_id
         if isbn13 or isbn10:
             by_isbn = await self._lookup(
                 isbn13 or isbn10,
-                isbn13=bool(isbn13),
+                item_id_type="ISBN13" if isbn13 else "ISBN",
                 content_type=content_type,
             )
             if by_isbn:
@@ -44,11 +53,11 @@ class AladinOfferProvider(ShoppingProvider):
             author=author,
         )
 
-    async def _lookup(self, item_id: str, *, isbn13: bool, content_type: str) -> list[Offer]:
+    async def _lookup(self, item_id: str, *, item_id_type: str, content_type: str) -> list[Offer]:
         params = {
             "ttbkey": self.ttb_key,
             "ItemId": item_id,
-            "ItemIdType": "ISBN13" if isbn13 else "ISBN",
+            "ItemIdType": item_id_type,
             "output": "js",
             "Version": "20131101",
         }
@@ -82,6 +91,49 @@ class AladinOfferProvider(ShoppingProvider):
             expected_title=title,
             expected_author=author,
         )
+
+    async def format_candidates(
+        self,
+        *,
+        title: str = "",
+        author: str = "",
+        publisher: str = "",
+        content_type: str = "physical_book",
+        limit: int = 10,
+    ) -> list[dict]:
+        if not self.ttb_key or not title.strip():
+            return []
+        queries = _candidate_queries(title, author)
+        candidates: dict[str, dict] = {}
+        for query in queries:
+            params = {
+                "ttbkey": self.ttb_key,
+                "Query": query,
+                "QueryType": "Keyword",
+                "SearchTarget": "eBook" if content_type == "ebook" else "Book",
+                "MaxResults": "10",
+                "start": "1",
+                "output": "js",
+                "Version": "20131101",
+            }
+            data = await self._get(ALADIN_ITEM_SEARCH, params)
+            for item in data.get("item", []):
+                candidate = _candidate_from_item(
+                    item,
+                    expected_title=title,
+                    expected_author=author,
+                    expected_publisher=publisher,
+                    content_type=content_type,
+                )
+                if candidate is None:
+                    continue
+                key = candidate["source_item_id"] or candidate["isbn13"] or candidate["product_url"]
+                if key and (key not in candidates or candidate["match_score"] > candidates[key]["match_score"]):
+                    candidates[key] = candidate
+            if len(candidates) >= limit:
+                break
+        result = sorted(candidates.values(), key=lambda item: item["match_score"], reverse=True)
+        return result[:limit]
 
     async def _get(self, url: str, params: dict[str, str]) -> dict:
         async with httpx.AsyncClient(timeout=self.timeout, follow_redirects=True) as client:
@@ -196,6 +248,127 @@ def _normalize_author(value: str) -> str:
     text = re.sub(r"[^0-9a-zA-Z가-힣]+", "", text)
     return text.lower()
 
+_CANDIDATE_SUFFIX_TOKENS = [
+    "특별판",
+    "기념판",
+    "개정판",
+    "리커버",
+    "양장본",
+    "초판본",
+    "한정판",
+    "에디션",
+    "합본",
+    "세트",
+    "박스 세트",
+    "워크북",
+    "별책",
+    "부록",
+    "보급판",
+    "소장판",
+]
+
+
+def _candidate_queries(title: str, author: str) -> list[str]:
+    compact = _compact_query_title(title)
+    raw = title.strip()
+    queries: list[str] = []
+    for value in [" ".join(part for part in [raw, author.strip()] if part), " ".join(part for part in [compact, author.strip()] if part), compact]:
+        value = " ".join(value.split())
+        if value and value not in queries:
+            queries.append(value)
+    return queries
+
+
+def _compact_query_title(value: str) -> str:
+    text = value.strip()
+    for delimiter in [" - ", " : ", " | "]:
+        if delimiter in text:
+            head, tail = text.split(delimiter, 1)
+            if _looks_like_suffix(tail):
+                text = head.strip()
+                break
+    text = re.sub(r"\s*[\(\[]([^\)\]]+)[\)\]]\s*", lambda match: " " if _looks_like_suffix(match.group(1)) else match.group(0), text)
+    return " ".join(text.split()) or value.strip()
+
+
+def _looks_like_suffix(value: str) -> bool:
+    lowered = value.lower()
+    return any(token.lower() in lowered for token in _CANDIDATE_SUFFIX_TOKENS)
+
+
+def _candidate_from_item(
+    item: dict,
+    *,
+    expected_title: str,
+    expected_author: str,
+    expected_publisher: str,
+    content_type: str,
+) -> dict | None:
+    title = str(item.get("title") or "")
+    author = str(item.get("author") or "")
+    publisher = str(item.get("publisher") or "")
+    mall_type = str(item.get("mallType") or "").upper()
+    if content_type == "ebook" and mall_type != "EBOOK":
+        return None
+    if content_type == "physical_book" and mall_type == "EBOOK":
+        return None
+    if not title or _blocked(title, content_type):
+        return None
+    expected = _normalize_title(expected_title)
+    compact_expected = _normalize_title(_compact_query_title(expected_title))
+    candidate = _normalize_title(title)
+    if not expected or not candidate:
+        return None
+    similarity = max(
+        SequenceMatcher(None, expected, candidate).ratio(),
+        SequenceMatcher(None, compact_expected, candidate).ratio() if compact_expected else 0,
+    )
+    containment = bool(compact_expected and (compact_expected in candidate or candidate in compact_expected))
+    if similarity < 0.55 and not containment:
+        return None
+    reasons: list[str] = []
+    score = similarity * 60
+    if containment:
+        score += 15
+        reasons.append("제목 핵심어 일치")
+    if expected == candidate or compact_expected == candidate:
+        score += 20
+        reasons.append("제목 정규화 일치")
+    expected_author_key = _normalize_author(expected_author)
+    candidate_author_key = _normalize_author(author)
+    if expected_author_key and candidate_author_key:
+        if expected_author_key in candidate_author_key:
+            score += 15
+            reasons.append("저자 일치")
+        else:
+            score -= 15
+            reasons.append("저자 확인 필요")
+    expected_publisher_key = _normalize_author(expected_publisher)
+    candidate_publisher_key = _normalize_author(publisher)
+    if expected_publisher_key and candidate_publisher_key and expected_publisher_key in candidate_publisher_key:
+        score += 5
+        reasons.append("출판사 일치")
+    if item.get("cover"):
+        score += 3
+        reasons.append("표지 제공")
+    if _to_int(item.get("priceSales")) is not None:
+        score += 2
+        reasons.append("가격 제공")
+    return {
+        "candidate_id": str(item.get("itemId") or item.get("isbn13") or item.get("link") or title),
+        "content_type": content_type,
+        "title": title,
+        "author": author,
+        "publisher": publisher,
+        "isbn13": str(item.get("isbn13") or ""),
+        "source_item_id": str(item.get("itemId") or ""),
+        "cover_url": str(item.get("cover") or ""),
+        "price": _to_int(item.get("priceSales")),
+        "original_price": _to_int(item.get("priceStandard")),
+        "product_url": str(item.get("link") or ""),
+        "match_score": round(max(score, 0), 2),
+        "match_reasons": reasons or ["후보 검색 결과"],
+    }
 
 def _to_int(value) -> int | None:
     try:
@@ -203,3 +376,5 @@ def _to_int(value) -> int | None:
         return int(text) if text else None
     except Exception:
         return None
+
+

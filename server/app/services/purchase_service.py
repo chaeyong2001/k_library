@@ -22,8 +22,9 @@ class PurchaseService:
         title: str = "",
         author: str = "",
         content_type: str = "physical_book",
+        source_item_id: str = "",
     ) -> tuple[list[Offer], bool, bool, str]:
-        cache_key = self._cache_key(isbn13, isbn10, title, author, content_type)
+        cache_key = self._cache_key(isbn13, isbn10, title, author, content_type, source_item_id)
         cached = self.db.scalar(
             select(PurchaseOfferCache).where(PurchaseOfferCache.cache_key == cache_key)
         )
@@ -44,6 +45,7 @@ class PurchaseService:
                     title=title,
                     author=author,
                     content_type=content_type,
+                    source_item_id=source_item_id,
                 )
                 priced = self._normalize_priced(
                     priced,
@@ -77,10 +79,11 @@ class PurchaseService:
             title=title,
             author=author,
             content_type=content_type,
+            source_item_id=source_item_id,
         )
         return [*priced, *links], cached_used, stale, message
 
-    async def _priced_offers(self, *, isbn13: str, isbn10: str, title: str, author: str, content_type: str) -> list[Offer]:
+    async def _priced_offers(self, *, isbn13: str, isbn10: str, title: str, author: str, content_type: str, source_item_id: str = "") -> list[Offer]:
         offers: list[Offer] = []
         for entry in self.registry.priced_entries():
             result = await entry.provider.search(
@@ -89,11 +92,12 @@ class PurchaseService:
                 title=title,
                 author=author,
                 content_type=content_type,
+                source_item_id=source_item_id,
             )
             offers.extend(self._with_meta(result, entry))
         return offers
 
-    async def _external_links(self, *, isbn13: str, isbn10: str, title: str, author: str, content_type: str) -> list[Offer]:
+    async def _external_links(self, *, isbn13: str, isbn10: str, title: str, author: str, content_type: str, source_item_id: str = "") -> list[Offer]:
         links: list[Offer] = []
         for entry in self.registry.external_link_entries():
             result = await entry.provider.search(
@@ -102,9 +106,39 @@ class PurchaseService:
                 title=title,
                 author=author,
                 content_type=content_type,
+                source_item_id=source_item_id,
             )
             links.extend(self._with_meta(result, entry))
         return links
+
+    async def format_candidates(
+        self,
+        *,
+        title: str = "",
+        author: str = "",
+        publisher: str = "",
+        target_content_type: str = "physical_book",
+    ) -> tuple[str, str, list[dict], str]:
+        query_title = " ".join(title.split())
+        normalized_title = " ".join(query_title.split())
+        if not query_title:
+            return query_title, normalized_title, [], "후보 검색에 사용할 제목이 없습니다."
+        candidates: list[dict] = []
+        for entry in self.registry.priced_entries():
+            finder = getattr(entry.provider, "format_candidates", None)
+            if finder is None:
+                continue
+            result = await finder(
+                title=query_title,
+                author=author,
+                publisher=publisher,
+                content_type=target_content_type,
+                limit=10,
+            )
+            candidates.extend(result)
+        candidates.sort(key=lambda item: item.get("match_score", 0), reverse=True)
+        safe_message = "" if candidates else "확인 가능한 후보 도서를 찾지 못했습니다."
+        return query_title, normalized_title, candidates[:10], safe_message
 
     def _with_meta(self, offers: list[Offer], entry: ShoppingProviderEntry) -> list[Offer]:
         for offer in offers:
@@ -117,7 +151,7 @@ class PurchaseService:
             offer.action_label = entry.meta.action_label
         return offers
 
-    def _normalize_priced(self, offers: list[Offer], *, isbn13: str, isbn10: str, title: str, author: str) -> list[Offer]:
+    def _normalize_priced(self, offers: list[Offer], *, isbn13: str, isbn10: str, title: str, author: str, content_type: str = "physical_book") -> list[Offer]:
         unique: dict[str, Offer] = {}
         for offer in offers:
             if offer.offer_type != "priced_offer":
@@ -173,7 +207,7 @@ class PurchaseService:
             item.stale = False
         self.db.commit()
 
-    def _cache_key(self, isbn13: str, isbn10: str, title: str, author: str, content_type: str) -> str:
-        value = isbn13.strip() or isbn10.strip() or f"{title.strip()} {author.strip()}".strip()
+    def _cache_key(self, isbn13: str, isbn10: str, title: str, author: str, content_type: str, source_item_id: str = "") -> str:
+        value = source_item_id.strip() or isbn13.strip() or isbn10.strip() or f"{title.strip()} {author.strip()}".strip()
         return f"purchase:{content_type}:aladin:" + " ".join(value.lower().split())
 

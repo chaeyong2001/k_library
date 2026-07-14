@@ -11,6 +11,7 @@ class Yes24LinkProvider(ShoppingProvider):
         title: str = "",
         author: str = "",
         content_type: str = "physical_book",
+        source_item_id: str = "",
     ) -> list[Offer]:
         query = _query(isbn13, isbn10, title, author)
         if not query:
@@ -45,6 +46,7 @@ class KyoboLinkProvider(ShoppingProvider):
         title: str = "",
         author: str = "",
         content_type: str = "physical_book",
+        source_item_id: str = "",
     ) -> list[Offer]:
         query = _query(isbn13, isbn10, title, author)
         if not query:

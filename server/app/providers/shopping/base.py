@@ -37,5 +37,6 @@ class ShoppingProvider:
         title: str = "",
         author: str = "",
         content_type: str = "physical_book",
+        source_item_id: str = "",
     ) -> list[Offer]:
         raise NotImplementedError

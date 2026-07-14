@@ -80,6 +80,7 @@ class BookPurchaseDetailPage extends StatefulWidget {
 class _BookPurchaseDetailPageState extends State<BookPurchaseDetailPage> {
   late String selectedContentType;
   final Map<String, _OfferState> _states = {};
+  final Map<String, PurchaseFormatCandidate> _selectedCandidates = {};
 
   @override
   void initState() {
@@ -95,6 +96,9 @@ class _BookPurchaseDetailPageState extends State<BookPurchaseDetailPage> {
 
   List<PurchaseOffer> get _currentOffers => _currentState.offers;
 
+  PurchaseFormatCandidate? get _selectedCandidate =>
+      _selectedCandidates[selectedContentType];
+
   PurchaseOffer? get _primaryMatchedOffer {
     for (final offer in _currentOffers) {
       if (offer.offerType == 'priced_offer') return offer;
@@ -103,46 +107,83 @@ class _BookPurchaseDetailPageState extends State<BookPurchaseDetailPage> {
   }
 
   String get _summaryTitle {
+    final candidateTitle = _selectedCandidate?.title.trim() ?? '';
+    if (candidateTitle.isNotEmpty) return candidateTitle;
     final offerTitle = _primaryMatchedOffer?.productName.trim() ?? '';
     return offerTitle.isNotEmpty
         ? offerTitle
         : widget.title.trim().isEmpty
-        ? 'Book purchase'
+        ? '도서 구매'
         : widget.title.trim();
   }
 
   String get _summaryCoverUrl {
+    final candidateCover = _selectedCandidate?.coverUrl.trim() ?? '';
+    if (candidateCover.isNotEmpty) return candidateCover;
     final offerCover = _primaryMatchedOffer?.imageUrl.trim() ?? '';
     return offerCover.isNotEmpty ? offerCover : widget.coverUrl;
   }
 
   String get _summaryIsbn {
+    final candidateIsbn = _selectedCandidate?.isbn13.trim() ?? '';
+    if (candidateIsbn.isNotEmpty) return candidateIsbn;
     final offerIsbn = _primaryMatchedOffer?.isbn13.trim() ?? '';
     if (offerIsbn.isNotEmpty) return offerIsbn;
     return widget.isbn13.isNotEmpty ? widget.isbn13 : widget.isbn10;
   }
 
+  String get _summaryAuthor {
+    final candidateAuthor = _selectedCandidate?.author.trim() ?? '';
+    return candidateAuthor.isNotEmpty ? candidateAuthor : widget.author;
+  }
+
+  String get _summaryPublisher {
+    final candidatePublisher = _selectedCandidate?.publisher.trim() ?? '';
+    return candidatePublisher.isNotEmpty ? candidatePublisher : widget.publisher;
+  }
+
   Future<void> _loadOffers(String contentType, {bool force = false}) async {
     if (!force && _states[contentType]?.loaded == true) return;
+    final selectedCandidate = _selectedCandidates[contentType];
     setState(() {
       _states[contentType] = const _OfferState.loading();
     });
     try {
       final result = await widget.purchaseApi.offers(
-        isbn13: widget.isbn13,
+        isbn13: selectedCandidate?.isbn13 ?? widget.isbn13,
         isbn10: widget.isbn10,
-        title: widget.title,
-        author: widget.author,
+        title: selectedCandidate?.title ?? widget.title,
+        author: selectedCandidate?.author ?? widget.author,
         contentType: contentType,
+        sourceItemId: selectedCandidate?.sourceItemId ?? '',
       );
+      final offers = _sortOffers(result.$1);
+      var candidates = const <PurchaseFormatCandidate>[];
+      var candidateMessage = '';
+      final hasPricedOffer = offers.any((offer) => _comparablePrice(offer) != null);
+      if (!hasPricedOffer && selectedCandidate == null) {
+        final candidateResult = await widget.purchaseApi.formatCandidates(
+          targetContentType: contentType,
+          title: widget.title,
+          author: widget.author,
+          publisher: widget.publisher,
+          isbn13: widget.isbn13,
+          isbn10: widget.isbn10,
+        );
+        candidates = candidateResult.$1;
+        candidateMessage = candidateResult.$2;
+      }
       _states[contentType] = _OfferState.loaded(
-        offers: _sortOffers(result.$1),
+        offers: offers,
+        candidates: candidates,
         message: result.$2,
+        candidateMessage: candidateMessage,
       );
     } catch (_) {
       _states[contentType] = const _OfferState.loaded(
         offers: [],
-        message: 'Unable to load purchase options.',
+        candidates: [],
+        message: '구매 옵션을 불러올 수 없습니다.',
       );
     } finally {
       if (mounted) setState(() {});
@@ -157,6 +198,16 @@ class _BookPurchaseDetailPageState extends State<BookPurchaseDetailPage> {
     if (value == selectedContentType) return;
     setState(() => selectedContentType = value);
     await _loadOffers(value);
+  }
+
+  Future<void> _selectCandidate(PurchaseFormatCandidate candidate) async {
+    _selectedCandidates[selectedContentType] = candidate;
+    await _loadOffers(selectedContentType, force: true);
+  }
+
+  Future<void> _clearSelectedCandidate() async {
+    _selectedCandidates.remove(selectedContentType);
+    await _loadOffers(selectedContentType, force: true);
   }
 
   @override
@@ -178,8 +229,8 @@ class _BookPurchaseDetailPageState extends State<BookPurchaseDetailPage> {
           children: [
             _BookSummary(
               title: _summaryTitle,
-              author: widget.author,
-              publisher: widget.publisher,
+              author: _summaryAuthor,
+              publisher: _summaryPublisher,
               isbn: _summaryIsbn,
               publicationDate: widget.publicationDate,
               coverUrl: _summaryCoverUrl,
@@ -194,7 +245,7 @@ class _BookPurchaseDetailPageState extends State<BookPurchaseDetailPage> {
             ),
             const SizedBox(height: 18),
             Text(
-              '${_formatLabel(selectedContentType)} price options',
+              '${_formatLabel(selectedContentType)} 가격 비교',
               style: Theme.of(context).textTheme.titleLarge,
             ),
             const SizedBox(height: 10),
@@ -209,9 +260,8 @@ class _BookPurchaseDetailPageState extends State<BookPurchaseDetailPage> {
                   icon: Icons.storefront_outlined,
                   title: _emptyTitle(selectedContentType),
                   body:
-                      'No confirmed ${_formatLabel(selectedContentType)} product was found from the connected priced provider. '
-                      'This does not mean the format is unavailable everywhere.',
-                  actionLabel: 'Retry',
+                      '현재 선택한 도서와 정확히 일치하는 ${_formatLabel(selectedContentType)}을 자동으로 찾지 못했습니다. 아래 후보 도서가 있다면 직접 확인해 보세요.',
+                  actionLabel: '다시 확인',
                   onAction: _refreshSelected,
                 )
               else
@@ -220,8 +270,8 @@ class _BookPurchaseDetailPageState extends State<BookPurchaseDetailPage> {
                     offer: offer,
                     isLowest: identical(offer, lowestOffer),
                     lowestLabel: pricedOffers.length == 1
-                        ? 'Confirmed price'
-                        : 'Lowest confirmed price',
+                        ? '현재 확인된 가격'
+                        : '현재 확인된 최저가',
                     openUrl: widget.links.openWebsite,
                     contentType: selectedContentType,
                   ),
@@ -229,14 +279,14 @@ class _BookPurchaseDetailPageState extends State<BookPurchaseDetailPage> {
               if (externalOffers.isNotEmpty) ...[
                 const SizedBox(height: 14),
                 Text(
-                  'Search other stores',
+                  '다른 판매처에서 검색',
                   style: Theme.of(context).textTheme.titleMedium,
                 ),
                 const SizedBox(height: 8),
                 _DetailInfoBox(
                   icon: Icons.search,
-                  title: 'You can search other stores directly.',
-                  body: 'These buttons open search pages and do not guarantee that the exact product exists.',
+                  title: '다른 판매처에서 직접 검색해 볼 수 있습니다.',
+                  body: '아래 버튼은 검색 페이지로 이동하며 실제 상품 존재를 보장하지 않습니다.',
                 ),
                 const SizedBox(height: 8),
                 ...externalOffers.map(
@@ -249,21 +299,32 @@ class _BookPurchaseDetailPageState extends State<BookPurchaseDetailPage> {
                   ),
                 ),
               ],
+              if (state.candidates.isNotEmpty || _selectedCandidate != null) ...[
+                const SizedBox(height: 16),
+                _CandidateSection(
+                  contentType: selectedContentType,
+                  candidates: state.candidates,
+                  selectedCandidate: _selectedCandidate,
+                  message: state.candidateMessage,
+                  onSelect: _selectCandidate,
+                  onClear: _clearSelectedCandidate,
+                ),
+              ],
             ],
             if (state.message.isNotEmpty) ...[
               const SizedBox(height: 8),
               _DetailInfoBox(
                 icon: Icons.info_outline,
-                title: 'Notice',
+                title: '안내',
                 body: state.message,
               ),
             ],
             const SizedBox(height: 12),
             const _DetailInfoBox(
               icon: Icons.verified_user_outlined,
-              title: 'Store notice',
+              title: '판매처 안내',
               body:
-                  'Prices, stock, shipping fees, and benefits can change. Please confirm final details at the store before purchase. This app is not an official store app or official affiliate app.',
+                  '가격, 재고, 배송비, 혜택은 변경될 수 있으며 결제 전 판매처에서 최종 확인해야 합니다. 이 앱은 각 판매처의 공식 앱이나 공식 제휴 앱이 아닙니다.',
             ),
           ],
         ),
@@ -276,22 +337,30 @@ class _OfferState {
   const _OfferState({
     required this.loading,
     required this.offers,
+    required this.candidates,
     required this.message,
+    this.candidateMessage = '',
   });
 
   const _OfferState.loading()
     : loading = true,
       offers = const [],
-      message = '';
+      candidates = const [],
+      message = '',
+      candidateMessage = '';
 
   const _OfferState.loaded({
     required this.offers,
+    required this.candidates,
     required this.message,
+    this.candidateMessage = '',
   }) : loading = false;
 
   final bool loading;
   final List<PurchaseOffer> offers;
+  final List<PurchaseFormatCandidate> candidates;
   final String message;
+  final String candidateMessage;
 
   bool get loaded => !loading;
 }
@@ -357,14 +426,14 @@ class _BookSummary extends StatelessWidget {
                     style: Theme.of(context).textTheme.titleLarge,
                   ),
                   const SizedBox(height: 10),
-                  if (author.isNotEmpty) _MetaLine(label: 'Author', value: author),
+                  if (author.isNotEmpty) _MetaLine(label: '저자', value: author),
                   if (publisher.isNotEmpty)
-                    _MetaLine(label: 'Publisher', value: publisher),
+                    _MetaLine(label: '출판사', value: publisher),
                   if (isbn.isNotEmpty) _MetaLine(label: 'ISBN', value: isbn),
                   if (publicationDate.isNotEmpty)
-                    _MetaLine(label: 'Date', value: publicationDate),
+                    _MetaLine(label: '출간일', value: publicationDate),
                   if (sourceProductUrl.isNotEmpty)
-                    const _MetaLine(label: 'Product link', value: 'Available from store'),
+                    const _MetaLine(label: '상품 링크', value: '판매처에서 확인 가능'),
                 ],
               ),
             ),
@@ -391,16 +460,183 @@ class _ContentTypeSelector extends StatelessWidget {
         ButtonSegment(
           value: 'physical_book',
           icon: Icon(Icons.menu_book_outlined),
-          label: Text('Paperback'),
+          label: Text('종이책'),
         ),
         ButtonSegment(
           value: 'ebook',
           icon: Icon(Icons.tablet_mac_outlined),
-          label: Text('eBook'),
+          label: Text('전자책'),
         ),
       ],
       selected: {selected},
       onSelectionChanged: (values) => onChanged(values.first),
+    );
+  }
+}
+
+class _CandidateSection extends StatelessWidget {
+  const _CandidateSection({
+    required this.contentType,
+    required this.candidates,
+    required this.selectedCandidate,
+    required this.message,
+    required this.onSelect,
+    required this.onClear,
+  });
+
+  final String contentType;
+  final List<PurchaseFormatCandidate> candidates;
+  final PurchaseFormatCandidate? selectedCandidate;
+  final String message;
+  final ValueChanged<PurchaseFormatCandidate> onSelect;
+  final VoidCallback onClear;
+
+  @override
+  Widget build(BuildContext context) {
+    final selected = selectedCandidate;
+    if (selected != null) {
+      return Card(
+        child: Padding(
+          padding: const EdgeInsets.all(14),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Badge(label: Text('선택한 ${_formatLabel(contentType)}')),
+              const SizedBox(height: 8),
+              Text(
+                selected.title,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+              if (selected.author.isNotEmpty) Text(selected.author),
+              const SizedBox(height: 10),
+              OutlinedButton.icon(
+                onPressed: onClear,
+                icon: const Icon(Icons.undo),
+                label: const Text('선택 취소'),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    if (candidates.isEmpty) {
+      return _DetailInfoBox(
+        icon: Icons.info_outline,
+        title: _emptyTitle(contentType),
+        body:
+            '${message.isEmpty ? '후보 도서를 찾지 못했습니다.' : message}\n다른 판매처에서 직접 검색해 볼 수 있습니다.',
+      );
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text('비슷한 도서 후보', style: Theme.of(context).textTheme.titleMedium),
+        const SizedBox(height: 6),
+        Text(
+          '아래 후보는 다른 판본 또는 다른 권일 수 있으므로 판매처에서 상세 정보를 확인해 주세요.',
+          style: Theme.of(context).textTheme.bodySmall,
+        ),
+        const SizedBox(height: 10),
+        SizedBox(
+          height: 258,
+          child: ListView.separated(
+            scrollDirection: Axis.horizontal,
+            itemCount: candidates.length,
+            separatorBuilder: (_, _) => const SizedBox(width: 10),
+            itemBuilder: (context, index) => _CandidateCard(
+              candidate: candidates[index],
+              onSelect: onSelect,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _CandidateCard extends StatelessWidget {
+  const _CandidateCard({required this.candidate, required this.onSelect});
+
+  final PurchaseFormatCandidate candidate;
+  final ValueChanged<PurchaseFormatCandidate> onSelect;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: 188,
+      child: Card(
+        child: Padding(
+          padding: const EdgeInsets.all(10),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(6),
+                    child: SizedBox(
+                      width: 52,
+                      height: 78,
+                      child: candidate.coverUrl.isEmpty
+                          ? const _CoverPlaceholder(size: 24)
+                          : Image.network(
+                              candidate.coverUrl,
+                              fit: BoxFit.cover,
+                              errorBuilder: (_, _, _) =>
+                                  const _CoverPlaceholder(size: 24),
+                            ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Badge(label: Text(_formatLabel(candidate.contentType))),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Text(
+                candidate.title,
+                maxLines: 3,
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(context).textTheme.bodyMedium,
+              ),
+              if (candidate.author.isNotEmpty)
+                Text(
+                  candidate.author,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              if (candidate.publisher.isNotEmpty)
+                Text(
+                  candidate.publisher,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              const Spacer(),
+              Text(
+                candidate.price == null
+                    ? '가격 확인'
+                    : '${_formatWon(candidate.price)}원',
+              ),
+              const SizedBox(height: 6),
+              SizedBox(
+                width: double.infinity,
+                child: FilledButton.tonal(
+                  onPressed: () => onSelect(candidate),
+                  child: const Text('이 도서 확인'),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }
@@ -442,13 +678,13 @@ class _PurchaseOfferCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
     final priceText = offer.isPriced
-        ? '${_formatWon(_comparablePrice(offer))} KRW'
+        ? '${_formatWon(_comparablePrice(offer))}원'
         : offer.message.isNotEmpty
         ? offer.message
-        : 'Check price at store';
+        : '가격은 판매처에서 확인';
     final originalText = offer.originalPrice == null
         ? ''
-        : 'List price ${_formatWon(offer.originalPrice)} KRW';
+        : '정가 ${_formatWon(offer.originalPrice)}원';
     final actionText = _actionText(offer, contentType);
     return Card(
       color: isLowest ? colorScheme.primaryContainer : null,
@@ -598,29 +834,29 @@ String _formatWon(int? value) {
 
 String _shortTitle(String value) {
   final trimmed = value.trim();
-  if (trimmed.isEmpty) return 'Book purchase';
+  if (trimmed.isEmpty) return '도서 구매';
   return trimmed.length > 14 ? '${trimmed.substring(0, 14)}...' : trimmed;
 }
 
 String _formatLabel(String contentType) =>
-    contentType == 'ebook' ? 'eBook' : 'Paperback';
+    contentType == 'ebook' ? '전자책' : '종이책';
 
 String _emptyTitle(String contentType) =>
     contentType == 'ebook'
-        ? 'No confirmed eBook product was found from connected stores.'
-        : 'No confirmed paperback product was found from connected stores.';
+        ? '현재 연결된 판매처에서 확인 가능한 전자책 상품이 없습니다.'
+        : '현재 연결된 판매처에서 확인 가능한 종이책 상품이 없습니다.';
 
 String _actionText(PurchaseOffer offer, String contentType) {
-  if (offer.offerType == 'priced_offer') return 'View product';
+  if (offer.offerType == 'priced_offer') return '상품 보기';
   if (offer.provider == 'yes24') {
     return contentType == 'ebook'
-        ? 'Search YES24 eBook'
-        : 'Search YES24 paperback';
+        ? 'YES24 eBook에서 검색'
+        : 'YES24에서 종이책 검색';
   }
   if (offer.provider == 'kyobo') {
     return contentType == 'ebook'
-        ? 'Search Kyobo eBook'
-        : 'Search Kyobo paperback';
+        ? '교보 eBook에서 검색'
+        : '교보문고에서 종이책 검색';
   }
   return offer.actionText;
 }
