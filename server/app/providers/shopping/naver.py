@@ -17,5 +17,6 @@ class NaverApiHubShoppingProvider(ShoppingProvider):
         isbn10: str = "",
         title: str = "",
         author: str = "",
+        content_type: str = "physical_book",
     ) -> list[Offer]:
         return []

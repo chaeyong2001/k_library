@@ -67,6 +67,11 @@ class BestsellerService:
         stmt = select(BestsellerItem)
         if source:
             stmt = stmt.where(BestsellerItem.source == source)
+        else:
+            active = self.active_sources(content_type)
+            if not active:
+                return []
+            stmt = stmt.where(BestsellerItem.source.in_(active))
         stmt = stmt.where(BestsellerItem.content_type == content_type)
         if category and category != "전체":
             stmt = stmt.where(BestsellerItem.category == category)
@@ -95,7 +100,11 @@ class BestsellerService:
         content_types = [content_type] if content_type else CONTENT_TYPES
         result: dict[str, str | dict[str, str]] = {}
         for item_content_type in content_types:
-            sources = [source] if source else self.active_sources(item_content_type)
+            active = self.active_sources(item_content_type)
+            if source and source not in active:
+                result[f"{source}:{item_content_type}"] = "skipped"
+                continue
+            sources = [source] if source else active
             for item_source in sources:
                 key = f"{item_source}:{item_content_type}"
                 plans = self._refresh_plans(item_source, item_content_type)

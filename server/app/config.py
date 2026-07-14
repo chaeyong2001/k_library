@@ -5,7 +5,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     database_url: str = "sqlite:///./k_library_dev.db"
     cors_origins: str = "*"
-    enable_yes24_bestseller: bool = True
+    enable_yes24_bestseller: bool = False
     enable_aladin_bestseller: bool = True
     enable_aladin_purchase: bool = True
     enable_yes24_link: bool = True

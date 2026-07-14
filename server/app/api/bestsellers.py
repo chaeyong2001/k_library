@@ -12,10 +12,11 @@ router = APIRouter(prefix="/api/v1/bestsellers", tags=["bestsellers"])
 def sources(content_type: str = "physical_book", db: Session = Depends(get_db)):
     service = BestsellerService(db)
     active = set(service.active_sources(content_type))
-    return [
+    entries = [
         SourceOut(source="yes24", label="YES24 기준", enabled="yes24" in active, categories=service.source_categories("yes24", content_type), reader_targets=service.source_reader_targets("yes24", content_type)),
         SourceOut(source="aladin", label="알라딘 기준", enabled="aladin" in active, categories=service.source_categories("aladin", content_type), reader_targets=service.source_reader_targets("aladin", content_type)),
     ]
+    return [entry for entry in entries if entry.enabled]
 
 
 @router.get("/categories", response_model=list[str])
