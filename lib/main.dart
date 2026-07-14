@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'config/app_config.dart';
 import 'config/genre_mapping.dart';
@@ -378,10 +379,83 @@ class _AppShellState extends State<AppShell> {
   }
 }
 
-class HomePage extends StatelessWidget {
+const _homeDataGuideKey = 'homeDataGuideLastClosedDate';
+const _purchaseDataGuideKey = 'purchaseDataGuideLastClosedDate';
+final Set<String> _shownDataGuidesThisSession = <String>{};
+
+String _localDateKey(DateTime value) {
+  final month = value.month.toString().padLeft(2, '0');
+  final day = value.day.toString().padLeft(2, '0');
+  return '${value.year}-$month-$day';
+}
+
+Future<void> showDataGuideIfNeeded({
+  required BuildContext context,
+  required String storageKey,
+  required String title,
+  required String body,
+}) async {
+  if (_shownDataGuidesThisSession.contains(storageKey)) return;
+  final prefs = await SharedPreferences.getInstance();
+  final today = _localDateKey(DateTime.now());
+  if (prefs.getString(storageKey) == today) {
+    _shownDataGuidesThisSession.add(storageKey);
+    return;
+  }
+  if (!context.mounted) return;
+  _shownDataGuidesThisSession.add(storageKey);
+  await showDialog<void>(
+    context: context,
+    builder: (dialogContext) => AlertDialog(
+      title: Text(title),
+      content: Text(body),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(dialogContext).pop(),
+          child: const Text('확인'),
+        ),
+        FilledButton.tonal(
+          onPressed: () async {
+            await prefs.setString(storageKey, today);
+            if (dialogContext.mounted) Navigator.of(dialogContext).pop();
+          },
+          child: const Text('오늘 하루 보지 않기'),
+        ),
+      ],
+    ),
+  );
+}
+
+class HomePage extends StatefulWidget {
   const HomePage({required this.state, required this.openSearch, super.key});
   final AppState state;
   final VoidCallback openSearch;
+
+  @override
+  State<HomePage> createState() => _HomePageState();
+}
+
+class _HomePageState extends State<HomePage> {
+  AppState get state => widget.state;
+  VoidCallback get openSearch => widget.openSearch;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      unawaited(
+        showDataGuideIfNeeded(
+          context: context,
+          storageKey: _homeDataGuideKey,
+          title: '도서관 데이터 안내',
+          body:
+              '홈의 맞춤 도서 추천과 인기 대출 도서는 정보나루 데이터를 기반으로 제공됩니다.\n'
+              '도서관 이용 및 대출 통계를 기준으로 한 목록이며, 서점 판매 순위와는 다를 수 있습니다.',
+        ),
+      );
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -1619,6 +1693,19 @@ class _PurchasePageState extends State<PurchasePage> {
           ? book.isbn
           : '${book.title} ${book.author}'.trim();
     }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      unawaited(
+        showDataGuideIfNeeded(
+          context: context,
+          storageKey: _purchaseDataGuideKey,
+          title: '베스트셀러 기준 안내',
+          body:
+              '구매 탭의 베스트셀러는 현재 알라딘 서점 기준으로 제공됩니다.\n'
+              '추후 공식 API 또는 제휴가 확보되면 다른 서점의 베스트셀러도 추가될 예정입니다.',
+        ),
+      );
+    });
     unawaited(_loadInitial());
   }
 

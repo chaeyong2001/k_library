@@ -78,100 +78,222 @@ class BookPurchaseDetailPage extends StatefulWidget {
 }
 
 class _BookPurchaseDetailPageState extends State<BookPurchaseDetailPage> {
-  List<PurchaseOffer> offers = const [];
-  bool loading = true;
-  String message = '';
+  late String selectedContentType;
+  final Map<String, _OfferState> _states = {};
 
   @override
   void initState() {
     super.initState();
-    unawaited(_loadOffers());
+    selectedContentType = widget.contentType == 'ebook'
+        ? 'ebook'
+        : 'physical_book';
+    unawaited(_loadOffers(selectedContentType));
   }
 
-  Future<void> _loadOffers() async {
-    setState(() => loading = true);
+  _OfferState get _currentState =>
+      _states[selectedContentType] ?? const _OfferState.loading();
+
+  List<PurchaseOffer> get _currentOffers => _currentState.offers;
+
+  PurchaseOffer? get _primaryMatchedOffer {
+    for (final offer in _currentOffers) {
+      if (offer.offerType == 'priced_offer') return offer;
+    }
+    return null;
+  }
+
+  String get _summaryTitle {
+    final offerTitle = _primaryMatchedOffer?.productName.trim() ?? '';
+    return offerTitle.isNotEmpty
+        ? offerTitle
+        : widget.title.trim().isEmpty
+        ? 'Book purchase'
+        : widget.title.trim();
+  }
+
+  String get _summaryCoverUrl {
+    final offerCover = _primaryMatchedOffer?.imageUrl.trim() ?? '';
+    return offerCover.isNotEmpty ? offerCover : widget.coverUrl;
+  }
+
+  String get _summaryIsbn {
+    final offerIsbn = _primaryMatchedOffer?.isbn13.trim() ?? '';
+    if (offerIsbn.isNotEmpty) return offerIsbn;
+    return widget.isbn13.isNotEmpty ? widget.isbn13 : widget.isbn10;
+  }
+
+  Future<void> _loadOffers(String contentType, {bool force = false}) async {
+    if (!force && _states[contentType]?.loaded == true) return;
+    setState(() {
+      _states[contentType] = const _OfferState.loading();
+    });
     try {
       final result = await widget.purchaseApi.offers(
         isbn13: widget.isbn13,
         isbn10: widget.isbn10,
         title: widget.title,
         author: widget.author,
-        contentType: widget.contentType,
+        contentType: contentType,
       );
-      offers = _sortOffers(result.$1);
-      message = result.$2;
+      _states[contentType] = _OfferState.loaded(
+        offers: _sortOffers(result.$1),
+        message: result.$2,
+      );
     } catch (_) {
-      offers = const [];
-      message = '구매 옵션을 불러올 수 없습니다.';
+      _states[contentType] = const _OfferState.loaded(
+        offers: [],
+        message: 'Unable to load purchase options.',
+      );
     } finally {
-      if (mounted) {
-        setState(() => loading = false);
-      }
+      if (mounted) setState(() {});
     }
+  }
+
+  Future<void> _refreshSelected() async {
+    await _loadOffers(selectedContentType, force: true);
+  }
+
+  Future<void> _changeContentType(String value) async {
+    if (value == selectedContentType) return;
+    setState(() => selectedContentType = value);
+    await _loadOffers(value);
   }
 
   @override
   Widget build(BuildContext context) {
-    final lowestOffer = _lowestPricedOffer(offers);
-    final title = widget.title.trim().isEmpty ? '도서 구매' : widget.title;
+    final state = _currentState;
+    final pricedOffers = _currentOffers
+        .where((offer) => _comparablePrice(offer) != null)
+        .toList();
+    final externalOffers = _currentOffers
+        .where((offer) => _comparablePrice(offer) == null)
+        .toList();
+    final lowestOffer = _lowestPricedOffer(pricedOffers);
     return Scaffold(
-      appBar: AppBar(title: Text(_shortTitle(title))),
+      appBar: AppBar(title: Text(_shortTitle(_summaryTitle))),
       body: RefreshIndicator(
-        onRefresh: _loadOffers,
+        onRefresh: _refreshSelected,
         child: ListView(
           padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
           children: [
             _BookSummary(
-              title: title,
+              title: _summaryTitle,
               author: widget.author,
               publisher: widget.publisher,
-              isbn: widget.isbn13.isNotEmpty ? widget.isbn13 : widget.isbn10,
+              isbn: _summaryIsbn,
               publicationDate: widget.publicationDate,
-              coverUrl: widget.coverUrl,
-              contentType: widget.contentType,
+              coverUrl: _summaryCoverUrl,
+              contentType: selectedContentType,
+              sourceProductUrl:
+                  _primaryMatchedOffer?.productUrl ?? widget.sourceProductUrl,
+            ),
+            const SizedBox(height: 14),
+            _ContentTypeSelector(
+              selected: selectedContentType,
+              onChanged: _changeContentType,
             ),
             const SizedBox(height: 18),
-            Text('구매 옵션', style: Theme.of(context).textTheme.titleLarge),
+            Text(
+              '${_formatLabel(selectedContentType)} price options',
+              style: Theme.of(context).textTheme.titleLarge,
+            ),
             const SizedBox(height: 10),
-            if (loading)
+            if (state.loading)
               const Padding(
                 padding: EdgeInsets.all(24),
                 child: Center(child: CircularProgressIndicator()),
               )
-            else if (offers.isEmpty)
-              const _DetailInfoBox(
-                icon: Icons.storefront_outlined,
-                title: '구매 옵션이 없습니다.',
-                body: '검색어를 바꾸거나 판매처에서 직접 확인해 주세요.',
-              )
-            else
-              ...offers.map(
-                (offer) => _PurchaseOfferCard(
-                  offer: offer,
-                  isLowest: identical(offer, lowestOffer),
-                  openUrl: widget.links.openWebsite,
+            else ...[
+              if (pricedOffers.isEmpty)
+                _DetailInfoBox(
+                  icon: Icons.storefront_outlined,
+                  title: _emptyTitle(selectedContentType),
+                  body:
+                      'No confirmed ${_formatLabel(selectedContentType)} product was found from the connected priced provider. '
+                      'This does not mean the format is unavailable everywhere.',
+                  actionLabel: 'Retry',
+                  onAction: _refreshSelected,
+                )
+              else
+                ...pricedOffers.map(
+                  (offer) => _PurchaseOfferCard(
+                    offer: offer,
+                    isLowest: identical(offer, lowestOffer),
+                    lowestLabel: pricedOffers.length == 1
+                        ? 'Confirmed price'
+                        : 'Lowest confirmed price',
+                    openUrl: widget.links.openWebsite,
+                    contentType: selectedContentType,
+                  ),
                 ),
-              ),
-            if (message.isNotEmpty) ...[
+              if (externalOffers.isNotEmpty) ...[
+                const SizedBox(height: 14),
+                Text(
+                  'Search other stores',
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
+                const SizedBox(height: 8),
+                _DetailInfoBox(
+                  icon: Icons.search,
+                  title: 'You can search other stores directly.',
+                  body: 'These buttons open search pages and do not guarantee that the exact product exists.',
+                ),
+                const SizedBox(height: 8),
+                ...externalOffers.map(
+                  (offer) => _PurchaseOfferCard(
+                    offer: offer,
+                    isLowest: false,
+                    lowestLabel: '',
+                    openUrl: widget.links.openWebsite,
+                    contentType: selectedContentType,
+                  ),
+                ),
+              ],
+            ],
+            if (state.message.isNotEmpty) ...[
               const SizedBox(height: 8),
               _DetailInfoBox(
                 icon: Icons.info_outline,
-                title: '안내',
-                body: message,
+                title: 'Notice',
+                body: state.message,
               ),
             ],
             const SizedBox(height: 12),
             const _DetailInfoBox(
               icon: Icons.verified_user_outlined,
-              title: '판매처 안내',
+              title: 'Store notice',
               body:
-                  '가격, 재고, 배송비, 혜택은 변경될 수 있으며 결제 전 판매처에서 최종 확인해야 합니다. 이 앱은 각 판매처의 공식 앱이나 공식 제휴 앱이 아닙니다. 외부 판매처로 이동하면 해당 업체의 정책이 적용됩니다.',
+                  'Prices, stock, shipping fees, and benefits can change. Please confirm final details at the store before purchase. This app is not an official store app or official affiliate app.',
             ),
           ],
         ),
       ),
     );
   }
+}
+
+class _OfferState {
+  const _OfferState({
+    required this.loading,
+    required this.offers,
+    required this.message,
+  });
+
+  const _OfferState.loading()
+    : loading = true,
+      offers = const [],
+      message = '';
+
+  const _OfferState.loaded({
+    required this.offers,
+    required this.message,
+  }) : loading = false;
+
+  final bool loading;
+  final List<PurchaseOffer> offers;
+  final String message;
+
+  bool get loaded => !loading;
 }
 
 class _BookSummary extends StatelessWidget {
@@ -183,6 +305,7 @@ class _BookSummary extends StatelessWidget {
     required this.publicationDate,
     required this.coverUrl,
     required this.contentType,
+    required this.sourceProductUrl,
   });
 
   final String title;
@@ -192,6 +315,7 @@ class _BookSummary extends StatelessWidget {
   final String publicationDate;
   final String coverUrl;
   final String contentType;
+  final String sourceProductUrl;
 
   @override
   Widget build(BuildContext context) {
@@ -204,15 +328,15 @@ class _BookSummary extends StatelessWidget {
             ClipRRect(
               borderRadius: BorderRadius.circular(8),
               child: SizedBox(
-                width: 104,
-                height: 156,
+                width: 112,
+                height: 168,
                 child: coverUrl.isEmpty
-                    ? const _CoverPlaceholder(size: 42)
+                    ? const _CoverPlaceholder(size: 44)
                     : Image.network(
                         coverUrl,
                         fit: BoxFit.cover,
                         errorBuilder: (_, _, _) =>
-                            const _CoverPlaceholder(size: 42),
+                            const _CoverPlaceholder(size: 44),
                       ),
               ),
             ),
@@ -221,6 +345,11 @@ class _BookSummary extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
+                  Badge(
+                    label: Text(_formatLabel(contentType)),
+                    backgroundColor: Theme.of(context).colorScheme.secondary,
+                  ),
+                  const SizedBox(height: 8),
                   Text(
                     title,
                     maxLines: 3,
@@ -228,23 +357,50 @@ class _BookSummary extends StatelessWidget {
                     style: Theme.of(context).textTheme.titleLarge,
                   ),
                   const SizedBox(height: 10),
-                  if (author.isNotEmpty) _MetaLine(label: '저자', value: author),
+                  if (author.isNotEmpty) _MetaLine(label: 'Author', value: author),
                   if (publisher.isNotEmpty)
-                    _MetaLine(label: '출판사', value: publisher),
+                    _MetaLine(label: 'Publisher', value: publisher),
                   if (isbn.isNotEmpty) _MetaLine(label: 'ISBN', value: isbn),
                   if (publicationDate.isNotEmpty)
-                    _MetaLine(label: '출간/기준', value: publicationDate),
-                  if (contentType == 'ebook')
-                    const Padding(
-                      padding: EdgeInsets.only(top: 4),
-                      child: Badge(label: Text('전자책')),
-                    ),
+                    _MetaLine(label: 'Date', value: publicationDate),
+                  if (sourceProductUrl.isNotEmpty)
+                    const _MetaLine(label: 'Product link', value: 'Available from store'),
                 ],
               ),
             ),
           ],
         ),
       ),
+    );
+  }
+}
+
+class _ContentTypeSelector extends StatelessWidget {
+  const _ContentTypeSelector({
+    required this.selected,
+    required this.onChanged,
+  });
+
+  final String selected;
+  final ValueChanged<String> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return SegmentedButton<String>(
+      segments: const [
+        ButtonSegment(
+          value: 'physical_book',
+          icon: Icon(Icons.menu_book_outlined),
+          label: Text('Paperback'),
+        ),
+        ButtonSegment(
+          value: 'ebook',
+          icon: Icon(Icons.tablet_mac_outlined),
+          label: Text('eBook'),
+        ),
+      ],
+      selected: {selected},
+      onSelectionChanged: (values) => onChanged(values.first),
     );
   }
 }
@@ -271,24 +427,29 @@ class _PurchaseOfferCard extends StatelessWidget {
   const _PurchaseOfferCard({
     required this.offer,
     required this.isLowest,
+    required this.lowestLabel,
     required this.openUrl,
+    required this.contentType,
   });
 
   final PurchaseOffer offer;
   final bool isLowest;
+  final String lowestLabel;
   final Future<void> Function(String url) openUrl;
+  final String contentType;
 
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
     final priceText = offer.isPriced
-        ? '${_formatWon(_comparablePrice(offer))}원'
+        ? '${_formatWon(_comparablePrice(offer))} KRW'
         : offer.message.isNotEmpty
         ? offer.message
-        : '가격은 판매처에서 확인';
+        : 'Check price at store';
     final originalText = offer.originalPrice == null
         ? ''
-        : '정가 ${_formatWon(offer.originalPrice)}원';
+        : 'List price ${_formatWon(offer.originalPrice)} KRW';
+    final actionText = _actionText(offer, contentType);
     return Card(
       color: isLowest ? colorScheme.primaryContainer : null,
       child: Padding(
@@ -306,7 +467,7 @@ class _PurchaseOfferCard extends StatelessWidget {
                 ),
                 if (isLowest)
                   Badge(
-                    label: const Text('최저가'),
+                    label: Text(lowestLabel),
                     backgroundColor: colorScheme.primary,
                   ),
               ],
@@ -336,7 +497,7 @@ class _PurchaseOfferCard extends StatelessWidget {
                     ? null
                     : () => openUrl(offer.productUrl),
                 icon: const Icon(Icons.open_in_new),
-                label: Text(offer.actionText),
+                label: Text(actionText),
               ),
             ),
           ],
@@ -364,11 +525,15 @@ class _DetailInfoBox extends StatelessWidget {
     required this.icon,
     required this.title,
     required this.body,
+    this.actionLabel = '',
+    this.onAction,
   });
 
   final IconData icon;
   final String title;
   final String body;
+  final String actionLabel;
+  final VoidCallback? onAction;
 
   @override
   Widget build(BuildContext context) {
@@ -377,6 +542,9 @@ class _DetailInfoBox extends StatelessWidget {
         leading: Icon(icon),
         title: Text(title),
         subtitle: Text(body),
+        trailing: actionLabel.isEmpty
+            ? null
+            : TextButton(onPressed: onAction, child: Text(actionLabel)),
       ),
     );
   }
@@ -430,6 +598,29 @@ String _formatWon(int? value) {
 
 String _shortTitle(String value) {
   final trimmed = value.trim();
-  if (trimmed.isEmpty) return '도서 구매';
+  if (trimmed.isEmpty) return 'Book purchase';
   return trimmed.length > 14 ? '${trimmed.substring(0, 14)}...' : trimmed;
+}
+
+String _formatLabel(String contentType) =>
+    contentType == 'ebook' ? 'eBook' : 'Paperback';
+
+String _emptyTitle(String contentType) =>
+    contentType == 'ebook'
+        ? 'No confirmed eBook product was found from connected stores.'
+        : 'No confirmed paperback product was found from connected stores.';
+
+String _actionText(PurchaseOffer offer, String contentType) {
+  if (offer.offerType == 'priced_offer') return 'View product';
+  if (offer.provider == 'yes24') {
+    return contentType == 'ebook'
+        ? 'Search YES24 eBook'
+        : 'Search YES24 paperback';
+  }
+  if (offer.provider == 'kyobo') {
+    return contentType == 'ebook'
+        ? 'Search Kyobo eBook'
+        : 'Search Kyobo paperback';
+  }
+  return offer.actionText;
 }
