@@ -21,6 +21,7 @@ class Offer:
     image_url: str = ""
     availability: str = "확인 필요"
     product_type: str = "book"
+    content_type: str = "physical_book"
     matched_by: str = "매칭 확인 필요"
     message: str = ""
     category: str = ""
@@ -35,5 +36,6 @@ class ShoppingProvider:
         isbn10: str = "",
         title: str = "",
         author: str = "",
+        content_type: str = "physical_book",
     ) -> list[Offer]:
         raise NotImplementedError

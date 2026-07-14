@@ -13,6 +13,7 @@ class BestsellerItem(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     source: Mapped[str] = mapped_column(String(32), index=True)
     source_item_id: Mapped[str] = mapped_column(String(160), default="")
+    content_type: Mapped[str] = mapped_column(String(40), index=True, default="physical_book")
     category: Mapped[str] = mapped_column(String(80), index=True, default="종합")
     reader_target: Mapped[str] = mapped_column(String(40), index=True, default="미분류")
     rank: Mapped[int] = mapped_column(Integer, index=True)
@@ -29,8 +30,8 @@ class BestsellerItem(Base):
     collected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
 
     __table_args__ = (
-        UniqueConstraint("source", "category", "reader_target", "ranking_date", "rank", name="uq_kl_best_rank"),
-        Index("ix_kl_best_source_category_reader_rank", "source", "category", "reader_target", "ranking_date", "rank"),
+        UniqueConstraint("source", "content_type", "category", "reader_target", "ranking_date", "rank", name="uq_kl_best_rank"),
+        Index("ix_kl_best_source_content_category_reader_rank", "source", "content_type", "category", "reader_target", "ranking_date", "rank"),
     )
 
 
@@ -38,6 +39,7 @@ class SyncRun(Base):
     __tablename__ = "kl_sync_runs"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     source: Mapped[str] = mapped_column(String(60), index=True)
+    content_type: Mapped[str] = mapped_column(String(40), index=True, default="physical_book")
     status: Mapped[str] = mapped_column(String(30), default="pending")
     last_success_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_attempt_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)

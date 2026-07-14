@@ -13,6 +13,7 @@ import 'services/services.dart';
 import 'services/loan_alert_service.dart';
 import 'services/purchase_api.dart';
 import 'screens/book_purchase_detail_page.dart';
+import 'screens/bestseller_rank_page.dart';
 import 'storage/local_store.dart';
 
 Future<void> main() async {
@@ -1587,17 +1588,27 @@ class PurchasePage extends StatefulWidget {
 
 class _PurchasePageState extends State<PurchasePage> {
   static const allFilter = '전체';
+  static const previewLimit = 5;
 
   final queryController = TextEditingController();
   List<BestsellerSource> sources = const [];
   List<String> categories = const ['종합'];
-  List<BestsellerBook> bestsellers = const [];
+  List<BestsellerBook> genreBestsellers = const [];
+  List<BestsellerBook> readerTargetBestsellers = const [];
+  String selectedContentType = 'physical_book';
   String selectedSource = '';
   String selectedCategory = allFilter;
   String selectedReaderTarget = allFilter;
-  DateTime? lastUpdated;
+  final Map<String, String> _sourceByContentType = {};
+  final Map<String, String> _categoryByContentType = {};
+  final Map<String, String> _readerTargetByContentType = {};
+  DateTime? genreLastUpdated;
+  DateTime? readerTargetLastUpdated;
   bool loading = true;
-  String message = '';
+  bool genreLoading = false;
+  bool readerTargetLoading = false;
+  String genreMessage = '';
+  String readerTargetMessage = '';
 
   @override
   void initState() {
@@ -1617,23 +1628,31 @@ class _PurchasePageState extends State<PurchasePage> {
     super.dispose();
   }
 
-  List<String> get _availableCategories {
+  BestsellerSource? get _selectedSourceInfo {
     for (final source in sources) {
-      if (source.source == selectedSource && source.categories.isNotEmpty) {
-        return _withAll(source.categories);
-      }
+      if (source.source == selectedSource) return source;
+    }
+    return null;
+  }
+
+  List<String> get _availableCategories {
+    final source = _selectedSourceInfo;
+    if (source != null && source.categories.isNotEmpty) {
+      return _withAll(source.categories);
     }
     return _withAll(categories.isEmpty ? const ['종합'] : categories);
   }
 
   List<String> get _availableReaderTargets {
-    for (final source in sources) {
-      if (source.source == selectedSource && source.readerTargets.isNotEmpty) {
-        return _withAll(source.readerTargets);
-      }
+    final source = _selectedSourceInfo;
+    if (source != null && source.readerTargets.isNotEmpty) {
+      return _withAll(source.readerTargets);
     }
     return const [allFilter];
   }
+
+  String get _sourceLabel => _selectedSourceInfo?.label ?? '베스트셀러';
+  bool get _isEbook => selectedContentType == 'ebook';
 
   List<String> _withAll(List<String> values) {
     final filtered = values
@@ -1646,61 +1665,131 @@ class _PurchasePageState extends State<PurchasePage> {
   Future<void> _loadInitial() async {
     setState(() => loading = true);
     try {
-      sources = await widget.state.purchaseApi.sources();
-      categories = await widget.state.purchaseApi.categories();
-      selectedSource = sources.isNotEmpty ? sources.first.source : '';
-      _normalizeFiltersForSource();
-      await _loadBestsellers();
+      await _loadContentTypeState();
+      await _loadAllPreviews();
     } catch (_) {
-      message = '구매 서버에 연결할 수 없습니다.';
+      genreMessage = '구매 서버에 연결할 수 없습니다.';
     } finally {
-      if (mounted) {
-        setState(() => loading = false);
-      }
+      if (mounted) setState(() => loading = false);
     }
   }
 
-  Future<void> _loadBestsellers() async {
-    final result = await widget.state.purchaseApi.bestsellers(
-      source: selectedSource,
-      category: selectedCategory == allFilter ? '' : selectedCategory,
-      readerTarget: selectedReaderTarget == allFilter
-          ? ''
-          : selectedReaderTarget,
+  Future<void> _loadContentTypeState() async {
+    sources = await widget.state.purchaseApi.sources(
+      contentType: selectedContentType,
     );
-    bestsellers = result.$1;
-    lastUpdated = result.$2;
-    message = result.$3;
-    if (mounted) {
-      setState(() {});
+    selectedSource =
+        _sourceByContentType[selectedContentType] ??
+        (sources.isNotEmpty ? sources.first.source : '');
+    if (!sources.any((source) => source.source == selectedSource)) {
+      selectedSource = sources.isNotEmpty ? sources.first.source : '';
+    }
+    categories = await widget.state.purchaseApi.categories(
+      source: selectedSource,
+      contentType: selectedContentType,
+    );
+    selectedCategory = _categoryByContentType[selectedContentType] ?? allFilter;
+    selectedReaderTarget =
+        _readerTargetByContentType[selectedContentType] ?? allFilter;
+    _normalizeFiltersForSource();
+    _rememberFilters();
+  }
+
+  Future<void> _loadAllPreviews() async {
+    await Future.wait([_loadGenrePreview(), _loadReaderTargetPreview()]);
+  }
+
+  Future<void> _loadGenrePreview() async {
+    if (mounted) setState(() => genreLoading = true);
+    try {
+      final result = await widget.state.purchaseApi.bestsellers(
+        source: selectedSource,
+        contentType: selectedContentType,
+        category: selectedCategory == allFilter ? '' : selectedCategory,
+        pageSize: previewLimit,
+      );
+      genreBestsellers = result.$1;
+      genreLastUpdated = result.$2;
+      genreMessage = result.$3;
+    } catch (_) {
+      genreBestsellers = const [];
+      genreMessage = '장르별 베스트셀러를 불러올 수 없습니다.';
+    } finally {
+      if (mounted) setState(() => genreLoading = false);
+    }
+  }
+
+  Future<void> _loadReaderTargetPreview() async {
+    if (mounted) setState(() => readerTargetLoading = true);
+    if (_availableReaderTargets.length <= 1) {
+      readerTargetBestsellers = const [];
+      readerTargetMessage = '';
+      if (mounted) setState(() => readerTargetLoading = false);
+      return;
+    }
+    try {
+      final result = await widget.state.purchaseApi.bestsellers(
+        source: selectedSource,
+        contentType: selectedContentType,
+        readerTarget: selectedReaderTarget == allFilter
+            ? ''
+            : selectedReaderTarget,
+        pageSize: previewLimit,
+      );
+      readerTargetBestsellers = result.$1;
+      readerTargetLastUpdated = result.$2;
+      readerTargetMessage = result.$3;
+    } catch (_) {
+      readerTargetBestsellers = const [];
+      readerTargetMessage = '독자 대상별 베스트셀러를 불러올 수 없습니다.';
+    } finally {
+      if (mounted) setState(() => readerTargetLoading = false);
     }
   }
 
   void _normalizeFiltersForSource() {
     final genres = _availableCategories;
     final targets = _availableReaderTargets;
-    if (!genres.contains(selectedCategory)) {
-      selectedCategory = allFilter;
-    }
-    if (!targets.contains(selectedReaderTarget)) {
+    if (!genres.contains(selectedCategory)) selectedCategory = allFilter;
+    if (!targets.contains(selectedReaderTarget))
       selectedReaderTarget = allFilter;
-    }
+  }
+
+  void _rememberFilters() {
+    _sourceByContentType[selectedContentType] = selectedSource;
+    _categoryByContentType[selectedContentType] = selectedCategory;
+    _readerTargetByContentType[selectedContentType] = selectedReaderTarget;
+  }
+
+  Future<void> _changeContentType(String value) async {
+    if (value == selectedContentType) return;
+    _rememberFilters();
+    setState(() {
+      selectedContentType = value;
+      loading = true;
+      genreBestsellers = const [];
+      readerTargetBestsellers = const [];
+    });
+    await _loadInitial();
   }
 
   Future<void> _changeSource(String source) async {
     selectedSource = source;
     _normalizeFiltersForSource();
-    await _loadBestsellers();
+    _rememberFilters();
+    await _loadAllPreviews();
   }
 
   Future<void> _changeCategory(String category) async {
     selectedCategory = category;
-    await _loadBestsellers();
+    _rememberFilters();
+    await _loadGenrePreview();
   }
 
   Future<void> _changeReaderTarget(String readerTarget) async {
     selectedReaderTarget = readerTarget;
-    await _loadBestsellers();
+    _rememberFilters();
+    await _loadReaderTargetPreview();
   }
 
   void _openBestsellerDetail(BestsellerBook book) {
@@ -1727,6 +1816,28 @@ class _PurchasePageState extends State<PurchasePage> {
           isbn13: isbn.length == 13 ? isbn : '',
           isbn10: isbn.length == 10 ? isbn : '',
           title: value,
+          contentType: selectedContentType,
+        ),
+      ),
+    );
+  }
+
+  void _openMore({required bool readerTarget}) {
+    final filterName = readerTarget ? selectedReaderTarget : selectedCategory;
+    final titlePrefix = readerTarget ? '독자 대상별' : '장르별';
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => BestsellerRankPage(
+          purchaseApi: widget.state.purchaseApi,
+          links: widget.state.links,
+          source: selectedSource,
+          sourceLabel: _sourceLabel,
+          title: '$titlePrefix 베스트셀러',
+          contentType: selectedContentType,
+          category: readerTarget || filterName == allFilter ? '' : filterName,
+          readerTarget: !readerTarget || filterName == allFilter
+              ? ''
+              : filterName,
         ),
       ),
     );
@@ -1759,13 +1870,6 @@ class _PurchasePageState extends State<PurchasePage> {
       );
     }
     if (loading) return const Center(child: CircularProgressIndicator());
-    var sourceLabel = '베스트셀러';
-    for (final source in sources) {
-      if (source.source == selectedSource) {
-        sourceLabel = source.label;
-        break;
-      }
-    }
     final targetEnabled = _availableReaderTargets.length > 1;
     return ListView(
       key: const PageStorageKey('purchase_bestseller_list'),
@@ -1785,6 +1889,16 @@ class _PurchasePageState extends State<PurchasePage> {
           ],
         ),
         const SizedBox(height: 12),
+        SegmentedButton<String>(
+          segments: const [
+            ButtonSegment(value: 'physical_book', label: Text('종이책')),
+            ButtonSegment(value: 'ebook', label: Text('전자책')),
+          ],
+          selected: {selectedContentType},
+          onSelectionChanged: (value) =>
+              unawaited(_changeContentType(value.first)),
+        ),
+        const SizedBox(height: 12),
         if (sources.length > 1)
           SegmentedButton<String>(
             segments: sources
@@ -1797,79 +1911,145 @@ class _PurchasePageState extends State<PurchasePage> {
                 unawaited(_changeSource(value.first)),
           ),
         const SizedBox(height: 10),
-        Row(
-          children: [
-            Expanded(
-              child: DropdownButtonFormField<String>(
-                initialValue: selectedCategory,
-                decoration: const InputDecoration(
-                  labelText: '장르별',
-                  border: OutlineInputBorder(),
-                ),
-                items: _availableCategories
-                    .map((e) => DropdownMenuItem(value: e, child: Text(e)))
-                    .toList(),
-                onChanged: (value) {
-                  if (value != null) unawaited(_changeCategory(value));
-                },
-              ),
-            ),
-            const SizedBox(width: 8),
-            Expanded(
-              child: DropdownButtonFormField<String>(
-                initialValue: selectedReaderTarget,
-                decoration: const InputDecoration(
-                  labelText: '독자 대상',
-                  border: OutlineInputBorder(),
-                ),
-                items: _availableReaderTargets
-                    .map((e) => DropdownMenuItem(value: e, child: Text(e)))
-                    .toList(),
-                onChanged: targetEnabled
-                    ? (value) {
-                        if (value != null) {
-                          unawaited(_changeReaderTarget(value));
-                        }
-                      }
-                    : null,
-              ),
-            ),
-          ],
+        DropdownButtonFormField<String>(
+          initialValue: selectedCategory,
+          decoration: const InputDecoration(
+            labelText: '장르별',
+            border: OutlineInputBorder(),
+          ),
+          items: _availableCategories
+              .map((e) => DropdownMenuItem(value: e, child: Text(e)))
+              .toList(),
+          onChanged: (value) {
+            if (value != null) unawaited(_changeCategory(value));
+          },
         ),
         const SizedBox(height: 10),
+        _BestsellerPreviewSection(
+          title: _isEbook ? '전자책 장르별 베스트셀러' : '장르별 베스트셀러',
+          subtitle: selectedCategory == allFilter ? '전체' : selectedCategory,
+          sourceLabel: _sourceLabel,
+          books: genreBestsellers,
+          loading: genreLoading,
+          message: genreMessage,
+          lastUpdated: genreLastUpdated,
+          onMore: () => _openMore(readerTarget: false),
+          onSelect: _openBestsellerDetail,
+          onOpenSource: (book) =>
+              widget.state.links.openWebsite(book.productUrl),
+        ),
+        const SizedBox(height: 18),
+        if (targetEnabled) ...[
+          DropdownButtonFormField<String>(
+            initialValue: selectedReaderTarget,
+            decoration: const InputDecoration(
+              labelText: '독자 대상',
+              border: OutlineInputBorder(),
+            ),
+            items: _availableReaderTargets
+                .map((e) => DropdownMenuItem(value: e, child: Text(e)))
+                .toList(),
+            onChanged: (value) {
+              if (value != null) unawaited(_changeReaderTarget(value));
+            },
+          ),
+          const SizedBox(height: 10),
+          _BestsellerPreviewSection(
+            title: '독자 대상별 베스트셀러',
+            subtitle: selectedReaderTarget == allFilter
+                ? '전체'
+                : selectedReaderTarget,
+            sourceLabel: _sourceLabel,
+            books: readerTargetBestsellers,
+            loading: readerTargetLoading,
+            message: readerTargetMessage,
+            lastUpdated: readerTargetLastUpdated,
+            onMore: () => _openMore(readerTarget: true),
+            onSelect: _openBestsellerDetail,
+            onOpenSource: (book) =>
+                widget.state.links.openWebsite(book.productUrl),
+          ),
+          const SizedBox(height: 12),
+        ] else if (_isEbook)
+          const InfoCard(
+            title: '전자책 독자 대상 필터',
+            body: '전자책은 공식 카테고리 기준으로 정확히 구분 가능한 장르별 필터만 제공합니다.',
+          )
+        else
+          const InfoCard(
+            title: '독자 대상 필터',
+            body: '현재 선택한 소스는 독자 대상별 베스트셀러를 제공하지 않습니다.',
+          ),
+        const SizedBox(height: 12),
         InfoCard(
-          title: sourceLabel,
-          body:
-              '마지막 갱신: ${lastUpdated == null ? '확인 필요' : lastUpdated!.toLocal().toString().substring(0, 16)}\n독자 대상은 구매자 연령 통계가 아니라 알라딘 카테고리 기준 분류입니다. 가격, 재고, 배송비, 혜택은 결제 전 판매처에서 최종 확인해야 합니다.',
+          title: '데이터 출처 안내',
+          body: _isEbook
+              ? '전자책은 알라딘 Open API의 eBook 베스트셀러와 가격 정보를 표시합니다. YES24와 교보문고는 전자책 검색 링크만 제공합니다.'
+              : '독자 대상은 구매자 연령 통계가 아니라 알라딘 카테고리 기준 분류입니다. YES24는 공식 베스트셀러 RSS와 외부 이동만 제공합니다. 알라딘은 Open API에서 제공되는 범위의 가격과 상품 정보를 표시합니다.',
+        ),
+      ],
+    );
+  }
+}
+
+class _BestsellerPreviewSection extends StatelessWidget {
+  const _BestsellerPreviewSection({
+    required this.title,
+    required this.subtitle,
+    required this.sourceLabel,
+    required this.books,
+    required this.loading,
+    required this.message,
+    required this.lastUpdated,
+    required this.onMore,
+    required this.onSelect,
+    required this.onOpenSource,
+  });
+
+  final String title;
+  final String subtitle;
+  final String sourceLabel;
+  final List<BestsellerBook> books;
+  final bool loading;
+  final String message;
+  final DateTime? lastUpdated;
+  final VoidCallback onMore;
+  final void Function(BestsellerBook book) onSelect;
+  final void Function(BestsellerBook book) onOpenSource;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SectionHeader(title: title, action: '더보기', onTap: onMore),
+        Text(
+          '$subtitle · 마지막 갱신: ${lastUpdated == null ? '확인 필요' : lastUpdated!.toLocal().toString().substring(0, 16)}',
+          style: Theme.of(context).textTheme.bodySmall,
         ),
         if (message.isNotEmpty) MessageCard(message: message),
-        const SectionHeader(title: '베스트셀러'),
-        if (sources.isEmpty)
-          const StateBox(
-            icon: Icons.menu_book_outlined,
-            title: '베스트셀러 데이터 소스 준비 중입니다.',
+        const SizedBox(height: 8),
+        if (loading)
+          const Padding(
+            padding: EdgeInsets.all(20),
+            child: Center(child: CircularProgressIndicator()),
           )
-        else if (bestsellers.isEmpty)
+        else if (books.isEmpty)
           const StateBox(
             icon: Icons.menu_book_outlined,
             title: '조건에 맞는 베스트셀러 데이터가 없습니다.',
           )
         else
-          ...bestsellers.map(
+          ...books.map(
             (book) => _BestsellerBookCard(
               book: book,
               sourceLabel: sourceLabel,
-              onSelect: () => _openBestsellerDetail(book),
+              onSelect: () => onSelect(book),
               onOpenSource: book.productUrl.isEmpty
                   ? null
-                  : () => widget.state.links.openWebsite(book.productUrl),
+                  : () => onOpenSource(book),
             ),
           ),
-        const InfoCard(
-          title: '데이터 출처 안내',
-          body:
-              'YES24는 공식 베스트셀러 RSS와 외부 이동만 제공합니다. 알라딘은 Open API에서 제공되는 범위의 가격과 상품 정보를 표시합니다. 교보문고는 외부 검색 이동만 제공합니다.',
-        ),
       ],
     );
   }
@@ -1938,6 +2118,10 @@ class _BestsellerBookCard extends StatelessWidget {
                       overflow: TextOverflow.ellipsis,
                       style: Theme.of(context).textTheme.titleMedium,
                     ),
+                    if (book.contentType == 'ebook') ...[
+                      const SizedBox(height: 4),
+                      const Badge(label: Text('전자책')),
+                    ],
                     const SizedBox(height: 6),
                     Text(
                       [

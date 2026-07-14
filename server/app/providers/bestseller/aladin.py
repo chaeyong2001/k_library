@@ -17,6 +17,19 @@ ALADIN_CATEGORY_IDS: dict[str, int | None] = {
     "에세이": 55890,
 }
 
+# Aladin eBook category ids confirmed from official Aladin category pages.
+ALADIN_EBOOK_CATEGORY_IDS: dict[str, int | None] = {
+    "종합": None,
+    "소설·문학": 90842,
+    "인문": 38403,
+    "경제·경영": 90835,
+    "자기계발": 38400,
+    "과학": 38405,
+    "역사": 38397,
+    "사회": 38404,
+    "에세이": 55889,
+}
+
 # Official Aladin top-level audience category ids confirmed from Aladin category pages.
 ALADIN_READER_TARGET_CATEGORY_IDS: dict[str, int] = {
     "유아": 13789,
@@ -36,19 +49,25 @@ class AladinBestsellerProvider(BestsellerProvider):
         category: str = "종합",
         limit: int = 50,
         reader_target: str | None = None,
+        content_type: str = "physical_book",
     ) -> list[BestsellerRecord]:
         if not self.ttb_key:
             return []
+        ebook = content_type == "ebook"
         params = {
             "ttbkey": self.ttb_key,
             "QueryType": "Bestseller",
             "MaxResults": str(min(limit, 50)),
             "start": "1",
-            "SearchTarget": "Book",
+            "SearchTarget": "eBook" if ebook else "Book",
             "output": "js",
             "Version": "20131101",
         }
-        if reader_target in ALADIN_READER_TARGET_CATEGORY_IDS:
+        if ebook:
+            category_id = ALADIN_EBOOK_CATEGORY_IDS.get(category)
+            if category_id is not None:
+                params["CategoryId"] = str(category_id)
+        elif reader_target in ALADIN_READER_TARGET_CATEGORY_IDS:
             params["CategoryId"] = str(ALADIN_READER_TARGET_CATEGORY_IDS[reader_target])
         else:
             category_id = ALADIN_CATEGORY_IDS.get(category)
@@ -60,13 +79,16 @@ class AladinBestsellerProvider(BestsellerProvider):
             data = response.json()
         records: list[BestsellerRecord] = []
         for idx, item in enumerate(data.get("item", [])[:limit], start=1):
+            if ebook and str(item.get("mallType") or "").upper() != "EBOOK":
+                continue
             category_name = str(item.get("categoryName") or "")
             records.append(
                 BestsellerRecord(
                     source=self.source,
                     source_item_id=str(item.get("itemId", "")),
-                    category=_genre_from_aladin_category(category_name, category, reader_target),
-                    reader_target=reader_target or "성인",
+                    category=_genre_from_aladin_category(category_name, category, None if ebook else reader_target),
+                    content_type=content_type,
+                    reader_target="미분류" if ebook else reader_target or "성인",
                     rank=idx,
                     title=str(item.get("title", "")),
                     author=str(item.get("author", "")),

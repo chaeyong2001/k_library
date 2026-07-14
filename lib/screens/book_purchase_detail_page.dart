@@ -19,6 +19,7 @@ class BookPurchaseDetailPage extends StatefulWidget {
     this.coverUrl = '',
     this.publicationDate = '',
     this.sourceProductUrl = '',
+    this.contentType = 'physical_book',
     super.key,
   });
 
@@ -37,6 +38,7 @@ class BookPurchaseDetailPage extends StatefulWidget {
     coverUrl: book.coverUrl,
     publicationDate: book.rankingDate,
     sourceProductUrl: book.productUrl,
+    contentType: book.contentType,
   );
 
   factory BookPurchaseDetailPage.fromBook({
@@ -69,6 +71,7 @@ class BookPurchaseDetailPage extends StatefulWidget {
   final String coverUrl;
   final String publicationDate;
   final String sourceProductUrl;
+  final String contentType;
 
   @override
   State<BookPurchaseDetailPage> createState() => _BookPurchaseDetailPageState();
@@ -93,6 +96,7 @@ class _BookPurchaseDetailPageState extends State<BookPurchaseDetailPage> {
         isbn10: widget.isbn10,
         title: widget.title,
         author: widget.author,
+        contentType: widget.contentType,
       );
       offers = _sortOffers(result.$1);
       message = result.$2;
@@ -124,6 +128,7 @@ class _BookPurchaseDetailPageState extends State<BookPurchaseDetailPage> {
               isbn: widget.isbn13.isNotEmpty ? widget.isbn13 : widget.isbn10,
               publicationDate: widget.publicationDate,
               coverUrl: widget.coverUrl,
+              contentType: widget.contentType,
             ),
             const SizedBox(height: 18),
             Text('구매 옵션', style: Theme.of(context).textTheme.titleLarge),
@@ -177,6 +182,7 @@ class _BookSummary extends StatelessWidget {
     required this.isbn,
     required this.publicationDate,
     required this.coverUrl,
+    required this.contentType,
   });
 
   final String title;
@@ -185,6 +191,7 @@ class _BookSummary extends StatelessWidget {
   final String isbn;
   final String publicationDate;
   final String coverUrl;
+  final String contentType;
 
   @override
   Widget build(BuildContext context) {
@@ -227,6 +234,11 @@ class _BookSummary extends StatelessWidget {
                   if (isbn.isNotEmpty) _MetaLine(label: 'ISBN', value: isbn),
                   if (publicationDate.isNotEmpty)
                     _MetaLine(label: '출간/기준', value: publicationDate),
+                  if (contentType == 'ebook')
+                    const Padding(
+                      padding: EdgeInsets.only(top: 4),
+                      child: Badge(label: Text('전자책')),
+                    ),
                 ],
               ),
             ),

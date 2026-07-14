@@ -10,10 +10,12 @@ class Yes24LinkProvider(ShoppingProvider):
         isbn10: str = "",
         title: str = "",
         author: str = "",
+        content_type: str = "physical_book",
     ) -> list[Offer]:
         query = _query(isbn13, isbn10, title, author)
         if not query:
             return []
+        domain = "EBOOK" if content_type == "ebook" else "BOOK"
         return [
             Offer(
                 provider="yes24",
@@ -24,8 +26,10 @@ class Yes24LinkProvider(ShoppingProvider):
                 price=None,
                 original_price=None,
                 total_price=None,
-                product_url=f"https://www.yes24.com/Product/Search?domain=BOOK&query={quote_plus(query)}",
+                product_url=f"https://www.yes24.com/Product/Search?domain={domain}&query={quote_plus(query)}",
                 availability="판매처 확인",
+                product_type="ebook" if content_type == "ebook" else "book",
+                content_type=content_type,
                 matched_by=_matched_by(isbn13, isbn10, title, author),
                 message="가격은 판매처에서 확인",
             )
@@ -40,10 +44,12 @@ class KyoboLinkProvider(ShoppingProvider):
         isbn10: str = "",
         title: str = "",
         author: str = "",
+        content_type: str = "physical_book",
     ) -> list[Offer]:
         query = _query(isbn13, isbn10, title, author)
         if not query:
             return []
+        gb_code = "EBK" if content_type == "ebook" else "TOT"
         return [
             Offer(
                 provider="kyobo",
@@ -54,8 +60,10 @@ class KyoboLinkProvider(ShoppingProvider):
                 price=None,
                 original_price=None,
                 total_price=None,
-                product_url=f"https://search.kyobobook.co.kr/search?keyword={quote_plus(query)}",
+                product_url=f"https://search.kyobobook.co.kr/search?keyword={quote_plus(query)}&gbCode={gb_code}",
                 availability="판매처 확인",
+                product_type="ebook" if content_type == "ebook" else "book",
+                content_type=content_type,
                 matched_by=_matched_by(isbn13, isbn10, title, author),
                 message="가격은 판매처에서 확인",
             )

@@ -18,19 +18,20 @@ class AladinOfferProvider(ShoppingProvider):
         isbn10: str = "",
         title: str = "",
         author: str = "",
+        content_type: str = "physical_book",
     ) -> list[Offer]:
         if not self.ttb_key:
             return []
         if isbn13 or isbn10:
-            by_isbn = await self._lookup(isbn13 or isbn10, isbn13=bool(isbn13))
+            by_isbn = await self._lookup(isbn13 or isbn10, isbn13=bool(isbn13), content_type=content_type)
             if by_isbn:
                 return by_isbn
         query = " ".join(part for part in [title, author] if part).strip() or title.strip()
         if not query:
             return []
-        return await self._search(query, matched_by="제목+저자" if author else "제목")
+        return await self._search(query, matched_by="제목+저자" if author else "제목", content_type=content_type)
 
-    async def _lookup(self, item_id: str, *, isbn13: bool) -> list[Offer]:
+    async def _lookup(self, item_id: str, *, isbn13: bool, content_type: str) -> list[Offer]:
         params = {
             "ttbkey": self.ttb_key,
             "ItemId": item_id,
@@ -39,21 +40,21 @@ class AladinOfferProvider(ShoppingProvider):
             "Version": "20131101",
         }
         data = await self._get(ALADIN_ITEM_LOOKUP, params)
-        return self._offers(data.get("item", []), matched_by="ISBN")
+        return self._offers(data.get("item", []), matched_by="ISBN", content_type=content_type)
 
-    async def _search(self, query: str, *, matched_by: str) -> list[Offer]:
+    async def _search(self, query: str, *, matched_by: str, content_type: str) -> list[Offer]:
         params = {
             "ttbkey": self.ttb_key,
             "Query": query,
             "QueryType": "Keyword",
-            "SearchTarget": "Book",
+            "SearchTarget": "eBook" if content_type == "ebook" else "Book",
             "MaxResults": "10",
             "start": "1",
             "output": "js",
             "Version": "20131101",
         }
         data = await self._get(ALADIN_ITEM_SEARCH, params)
-        return self._offers(data.get("item", []), matched_by=matched_by)
+        return self._offers(data.get("item", []), matched_by=matched_by, content_type=content_type)
 
     async def _get(self, url: str, params: dict[str, str]) -> dict:
         async with httpx.AsyncClient(timeout=self.timeout, follow_redirects=True) as client:
@@ -62,18 +63,24 @@ class AladinOfferProvider(ShoppingProvider):
             data = response.json()
         return data if isinstance(data, dict) else {}
 
-    def _offers(self, items: list[dict], *, matched_by: str) -> list[Offer]:
+    def _offers(self, items: list[dict], *, matched_by: str, content_type: str) -> list[Offer]:
         offers: list[Offer] = []
         for item in items:
             title = str(item.get("title") or "")
-            if not title or _blocked(title):
+            mall_type = str(item.get("mallType") or "").upper()
+            if content_type == "ebook" and mall_type != "EBOOK":
+                continue
+            if content_type == "physical_book" and mall_type == "EBOOK":
+                continue
+            if not title or _blocked(title, content_type):
                 continue
             price = _to_int(item.get("priceSales"))
             original = _to_int(item.get("priceStandard"))
             url = str(item.get("link") or "")
             if not url:
                 query = quote_plus(str(item.get("isbn13") or title))
-                url = f"https://www.aladin.co.kr/search/wsearchresult.aspx?SearchTarget=Book&SearchWord={query}"
+                target = "eBook" if content_type == "ebook" else "Book"
+                url = f"https://www.aladin.co.kr/search/wsearchresult.aspx?SearchTarget={target}&SearchWord={query}"
             offers.append(
                 Offer(
                     provider="aladin",
@@ -87,6 +94,8 @@ class AladinOfferProvider(ShoppingProvider):
                     product_url=url,
                     image_url=str(item.get("cover") or ""),
                     availability="판매처 확인",
+                    product_type="ebook" if content_type == "ebook" else "book",
+                    content_type=content_type,
                     matched_by=matched_by,
                     message="가격, 재고, 배송비, 혜택은 결제 전 판매처에서 최종 확인해 주세요.",
                     category=str(item.get("categoryName") or ""),
@@ -95,9 +104,12 @@ class AladinOfferProvider(ShoppingProvider):
         return offers[:3]
 
 
-def _blocked(value: str) -> bool:
+def _blocked(value: str, content_type: str) -> bool:
     lowered = value.lower()
-    return any(token in lowered for token in ["ebook", "전자책", "오디오북", "중고", "세트", "분철", "굿즈"])
+    tokens = ["오디오북", "중고", "세트", "분철", "굿즈"]
+    if content_type != "ebook":
+        tokens.extend(["ebook", "전자책"])
+    return any(token in lowered for token in tokens)
 
 
 def _to_int(value) -> int | None:

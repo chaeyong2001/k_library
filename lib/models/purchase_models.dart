@@ -33,6 +33,7 @@ class BestsellerBook {
     required this.category,
     required this.rank,
     required this.title,
+    this.contentType = 'physical_book',
     this.readerTarget = '미분류',
     this.author = '',
     this.publisher = '',
@@ -45,6 +46,7 @@ class BestsellerBook {
   });
   final String source;
   final String category;
+  final String contentType;
   final String readerTarget;
   final int rank;
   final String title;
@@ -59,6 +61,7 @@ class BestsellerBook {
   factory BestsellerBook.fromJson(Map<String, dynamic> json) => BestsellerBook(
     source: '${json['source'] ?? ''}',
     category: '${json['category'] ?? '종합'}',
+    contentType: '${json['content_type'] ?? 'physical_book'}',
     readerTarget: '${json['reader_target'] ?? '미분류'}',
     rank: _int(json['rank']) ?? 0,
     title: '${json['title'] ?? ''}',
@@ -92,6 +95,7 @@ class PurchaseOffer {
     this.imageUrl = '',
     this.availability = '확인 필요',
     this.productType = 'book',
+    this.contentType = 'physical_book',
     this.matchedBy = '매칭 확인 필요',
     this.message = '',
     this.category = '',
@@ -114,6 +118,7 @@ class PurchaseOffer {
   final String imageUrl;
   final String availability;
   final String productType;
+  final String contentType;
   final String matchedBy;
   final String message;
   final String category;
@@ -150,6 +155,7 @@ class PurchaseOffer {
     imageUrl: '${json['image_url'] ?? ''}',
     availability: '${json['availability'] ?? '확인 필요'}',
     productType: '${json['product_type'] ?? 'book'}',
+    contentType: '${json['content_type'] ?? 'physical_book'}',
     matchedBy: '${json['matched_by'] ?? '매칭 확인 필요'}',
     message: '${json['message'] ?? ''}',
     category: '${json['category'] ?? ''}',

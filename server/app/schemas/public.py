@@ -5,6 +5,7 @@ from pydantic import BaseModel
 class BestsellerItemOut(BaseModel):
     source: str
     source_item_id: str = ""
+    content_type: str = "physical_book"
     category: str
     reader_target: str = "미분류"
     rank: int
@@ -24,6 +25,7 @@ class BestsellerItemOut(BaseModel):
 class BestsellerResponse(BaseModel):
     active_sources: list[str]
     selected_source: str | None
+    content_type: str = "physical_book"
     category: str | None
     reader_target: str | None = None
     items: list[BestsellerItemOut]
@@ -50,6 +52,7 @@ class OfferOut(BaseModel):
     image_url: str = ""
     availability: str = "확인 필요"
     product_type: str = "book"
+    content_type: str = "physical_book"
     matched_by: str = "매칭 확인 필요"
     message: str = ""
     category: str = ""

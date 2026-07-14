@@ -21,8 +21,9 @@ class PurchaseService:
         isbn10: str = "",
         title: str = "",
         author: str = "",
+        content_type: str = "physical_book",
     ) -> tuple[list[Offer], bool, bool, str]:
-        cache_key = self._cache_key(isbn13, isbn10, title, author)
+        cache_key = self._cache_key(isbn13, isbn10, title, author, content_type)
         cached = self.db.scalar(
             select(PurchaseOfferCache).where(PurchaseOfferCache.cache_key == cache_key)
         )
@@ -42,6 +43,7 @@ class PurchaseService:
                     isbn10=isbn10,
                     title=title,
                     author=author,
+                    content_type=content_type,
                 )
                 priced = self._normalize_priced(
                     priced,
@@ -49,6 +51,7 @@ class PurchaseService:
                     isbn10=isbn10,
                     title=title,
                     author=author,
+                    content_type=content_type,
                 )
                 if priced:
                     self._save_cache(cache_key, isbn13 or isbn10 or title, priced)
@@ -73,10 +76,11 @@ class PurchaseService:
             isbn10=isbn10,
             title=title,
             author=author,
+            content_type=content_type,
         )
         return [*priced, *links], cached_used, stale, message
 
-    async def _priced_offers(self, *, isbn13: str, isbn10: str, title: str, author: str) -> list[Offer]:
+    async def _priced_offers(self, *, isbn13: str, isbn10: str, title: str, author: str, content_type: str) -> list[Offer]:
         offers: list[Offer] = []
         for entry in self.registry.priced_entries():
             result = await entry.provider.search(
@@ -84,11 +88,12 @@ class PurchaseService:
                 isbn10=isbn10,
                 title=title,
                 author=author,
+                content_type=content_type,
             )
             offers.extend(self._with_meta(result, entry))
         return offers
 
-    async def _external_links(self, *, isbn13: str, isbn10: str, title: str, author: str) -> list[Offer]:
+    async def _external_links(self, *, isbn13: str, isbn10: str, title: str, author: str, content_type: str) -> list[Offer]:
         links: list[Offer] = []
         for entry in self.registry.external_link_entries():
             result = await entry.provider.search(
@@ -96,6 +101,7 @@ class PurchaseService:
                 isbn10=isbn10,
                 title=title,
                 author=author,
+                content_type=content_type,
             )
             links.extend(self._with_meta(result, entry))
         return links
@@ -167,7 +173,7 @@ class PurchaseService:
             item.stale = False
         self.db.commit()
 
-    def _cache_key(self, isbn13: str, isbn10: str, title: str, author: str) -> str:
+    def _cache_key(self, isbn13: str, isbn10: str, title: str, author: str, content_type: str) -> str:
         value = isbn13.strip() or isbn10.strip() or f"{title.strip()} {author.strip()}".strip()
-        return "purchase:aladin:" + " ".join(value.lower().split())
+        return f"purchase:{content_type}:aladin:" + " ".join(value.lower().split())
 

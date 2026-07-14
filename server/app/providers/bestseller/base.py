@@ -7,6 +7,7 @@ class BestsellerRecord:
     source_item_id: str
     category: str
     rank: int
+    content_type: str = "physical_book"
     reader_target: str = "미분류"
     title: str = ""
     author: str = ""
@@ -27,5 +28,6 @@ class BestsellerProvider:
         category: str = "종합",
         limit: int = 50,
         reader_target: str | None = None,
+        content_type: str = "physical_book",
     ) -> list[BestsellerRecord]:
         raise NotImplementedError

@@ -14,11 +14,15 @@ class PurchaseApiClient {
     '${AppConfig.purchaseApiBaseUrl}$path',
   ).replace(queryParameters: query..removeWhere((_, v) => v.trim().isEmpty));
 
-  Future<List<BestsellerSource>> sources() async {
+  Future<List<BestsellerSource>> sources({
+    String contentType = 'physical_book',
+  }) async {
     if (!isConfigured) {
       return const [];
     }
-    final data = await _get('/api/v1/bestsellers/sources');
+    final data = await _get('/api/v1/bestsellers/sources', {
+      'content_type': contentType,
+    });
     return (data as List)
         .whereType<Map>()
         .map((e) => BestsellerSource.fromJson(Map<String, dynamic>.from(e)))
@@ -26,26 +30,38 @@ class PurchaseApiClient {
         .toList();
   }
 
-  Future<List<String>> categories() async {
+  Future<List<String>> categories({
+    String source = '',
+    String contentType = 'physical_book',
+  }) async {
     if (!isConfigured) {
       return const ['종합'];
     }
-    final data = await _get('/api/v1/bestsellers/categories');
+    final data = await _get('/api/v1/bestsellers/categories', {
+      'source': source,
+      'content_type': contentType,
+    });
     return (data as List).map((e) => '$e').toList();
   }
 
   Future<(List<BestsellerBook>, DateTime?, String)> bestsellers({
     String source = '',
+    String contentType = 'physical_book',
     String category = '',
     String readerTarget = '',
+    int page = 1,
+    int pageSize = 30,
   }) async {
     if (!isConfigured) {
       return (const <BestsellerBook>[], null, '구매 서버 주소가 설정되지 않았습니다.');
     }
     final data = await _get('/api/v1/bestsellers', {
       'source': source,
+      'content_type': contentType,
       'category': category,
       'reader_target': readerTarget,
+      'page': '$page',
+      'page_size': '$pageSize',
     });
     final map = Map<String, dynamic>.from(data as Map);
     final items = (map['items'] as List? ?? const [])
@@ -64,6 +80,7 @@ class PurchaseApiClient {
     String isbn10 = '',
     String title = '',
     String author = '',
+    String contentType = 'physical_book',
   }) async {
     if (!isConfigured) {
       return (const <PurchaseOffer>[], '구매 서버 주소가 설정되지 않았습니다.', false);
@@ -73,6 +90,7 @@ class PurchaseApiClient {
       'isbn10': isbn10,
       'title': title,
       'author': author,
+      'content_type': contentType,
     });
     final map = Map<String, dynamic>.from(data as Map);
     final offers = (map['offers'] as List? ?? const [])
