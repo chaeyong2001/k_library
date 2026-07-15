@@ -1,4 +1,5 @@
 import '../config/app_config.dart';
+import '../data/data4library_cache.dart';
 import '../data/data4library_api_client.dart';
 import '../data/demo_data_source.dart';
 import '../models/models.dart';
@@ -17,13 +18,65 @@ class LibraryRepository {
   final DemoDataSource _demo;
   final LocalStore _store;
   final Map<String, Future<Object>> _inFlight = {};
+  final Data4LibraryMemoryCache _memory = Data4LibraryMemoryCache();
+
+  void close() => _api.close();
 
   Future<List<Book>> recommendations(
     RecommendationPrefs prefs, {
     String period = '최근 30일',
     bool forceRefresh = false,
+    int limit = 5,
   }) async {
-    if (AppConfig.isDemoMode) return _demo.recommendations(prefs);
+    if (AppConfig.isDemoMode) return _demo.recommendations(prefs, limit: limit);
+    final cacheKey =
+        '${AppConfig.dataMode}:recommendation:age=${_keyPart(prefs.ageGroup)}:gender=${_keyPart(prefs.gender)}:genres=${prefs.genres.map(_keyPart).join('|')}:period=${_keyPart(period)}:limit=$limit';
+    if (!forceRefresh) {
+      final memory = _memory.fresh<List<Book>>(cacheKey);
+      if (memory != null) return memory;
+    } else {
+      _memory.remove(cacheKey);
+    }
+    return _dedupe(cacheKey, () {
+      if (forceRefresh) {
+        return _loadRecommendationsFromSource(
+          prefs,
+          period: period,
+          forceRefresh: true,
+          limit: limit,
+        );
+      }
+      return _store.cached<List<Book>>(
+        cacheKey,
+        Data4LibraryCacheTtl.recommendationFresh,
+        () => _loadRecommendationsFromSource(
+          prefs,
+          period: period,
+          forceRefresh: false,
+          limit: limit,
+        ),
+        _booksFromJson,
+        (value) => value.map((e) => e.toJson()).toList(),
+        staleTtl: Data4LibraryCacheTtl.recommendationStale,
+        refreshStaleInBackground: true,
+      ).then((value) {
+        _memory.set(
+          cacheKey,
+          value,
+          freshTtl: Data4LibraryCacheTtl.recommendationFresh,
+          staleTtl: Data4LibraryCacheTtl.recommendationStale,
+        );
+        return value;
+      });
+    });
+  }
+
+  Future<List<Book>> _loadRecommendationsFromSource(
+    RecommendationPrefs prefs, {
+    required String period,
+    required bool forceRefresh,
+    required int limit,
+  }) async {
     final selectedGenres = prefs.genres.isEmpty ? const ['전체'] : prefs.genres;
     final results = <Book>[];
     for (final genre in selectedGenres) {
@@ -33,6 +86,7 @@ class LibraryRepository {
         genre: genre,
         period: period,
         forceRefresh: forceRefresh,
+        pageSize: limit.clamp(20, 50).toInt(),
       );
       for (final book in books) {
         if (!results.any((e) => e.isbn == book.isbn)) {
@@ -43,7 +97,7 @@ class LibraryRepository {
             ),
           );
         }
-        if (results.length >= 5) return results;
+        if (results.length >= limit) return results;
       }
     }
     if (results.length < 3) {
@@ -52,6 +106,7 @@ class LibraryRepository {
         gender: prefs.gender,
         period: period,
         forceRefresh: forceRefresh,
+        pageSize: limit.clamp(20, 50).toInt(),
       );
       for (final book in relaxed) {
         if (!results.any((e) => e.isbn == book.isbn)) {
@@ -59,10 +114,10 @@ class LibraryRepository {
             book.copyWith(reason: '조건 완화: ${prefs.ageGroup} 인기 대출도서 기반'),
           );
         }
-        if (results.length >= 5) break;
+        if (results.length >= limit) break;
       }
     }
-    return results.take(5).toList();
+    return results.take(limit).toList();
   }
 
   Future<List<Book>> popularBooks({
@@ -71,9 +126,16 @@ class LibraryRepository {
     String? genre,
     String period = '최근 30일',
     bool forceRefresh = false,
+    int pageSize = 20,
   }) async {
     final cacheKey =
-        '${AppConfig.dataMode}:popular:$ageGroup:$gender:$genre:$period:${DateTime.now().toIso8601String().substring(0, 10)}';
+        '${AppConfig.dataMode}:popular-loan:age=${_keyPart(ageGroup)}:gender=${_keyPart(gender)}:genre=${_keyPart(genre)}:period=${_keyPart(period)}:page=1:size=$pageSize:date=${DateTime.now().toIso8601String().substring(0, 10)}';
+    if (!forceRefresh) {
+      final memory = _memory.fresh<List<Book>>(cacheKey);
+      if (memory != null) return memory;
+    } else {
+      _memory.remove(cacheKey);
+    }
     return _dedupe(cacheKey, () {
       if (forceRefresh) {
         return _loadPopularFromSource(
@@ -81,28 +143,32 @@ class LibraryRepository {
           gender: gender,
           genre: genre,
           period: period,
+          pageSize: pageSize,
         );
       }
       return _store.cached<List<Book>>(
         cacheKey,
-        const Duration(hours: 6),
+        Data4LibraryCacheTtl.popularFresh,
         () => _loadPopularFromSource(
           ageGroup: ageGroup,
           gender: gender,
           genre: genre,
           period: period,
+          pageSize: pageSize,
         ),
-        (json) => (json as List)
-            .whereType<Map>()
-            .map(
-              (e) => Book.fromJson(
-                Map<String, dynamic>.from(e),
-                isDemo: AppConfig.isDemoMode,
-              ),
-            )
-            .toList(),
+        _booksFromJson,
         (value) => value.map((e) => e.toJson()).toList(),
-      );
+        staleTtl: Data4LibraryCacheTtl.popularStale,
+        refreshStaleInBackground: true,
+      ).then((value) {
+        _memory.set(
+          cacheKey,
+          value,
+          freshTtl: Data4LibraryCacheTtl.popularFresh,
+          staleTtl: Data4LibraryCacheTtl.popularStale,
+        );
+        return value;
+      });
     });
   }
 
@@ -111,6 +177,7 @@ class LibraryRepository {
     String? gender,
     String? genre,
     required String period,
+    int pageSize = 20,
   }) async {
     if (AppConfig.isDemoMode) {
       return _demo.popular(ageGroup: ageGroup, gender: gender, genre: genre);
@@ -122,6 +189,7 @@ class LibraryRepository {
         genre: genre,
         period: period,
       ),
+      pageSize: pageSize,
     );
   }
 
@@ -129,27 +197,24 @@ class LibraryRepository {
     final normalized = normalizeIsbn(query).isNotEmpty
         ? normalizeIsbn(query)
         : query.trim();
-    final cacheKey = '${AppConfig.dataMode}:search:$normalized';
+    final cacheKey = '${AppConfig.dataMode}:book-search:query=${_keyPart(normalized)}:page=1:size=20';
+    final memory = _memory.fresh<List<Book>>(cacheKey);
+    if (memory != null) return memory;
     return _dedupe(
       cacheKey,
       () => _store.cached<List<Book>>(
         cacheKey,
-        const Duration(minutes: 20),
+        Data4LibraryCacheTtl.searchFresh,
         () async {
           if (AppConfig.isDemoMode) return _demo.searchBooks(normalized);
           return _api.searchBooks(normalized);
         },
-        (json) => (json as List)
-            .whereType<Map>()
-            .map(
-              (e) => Book.fromJson(
-                Map<String, dynamic>.from(e),
-                isDemo: AppConfig.isDemoMode,
-              ),
-            )
-            .toList(),
+        _booksFromJson,
         (value) => value.map((e) => e.toJson()).toList(),
-      ),
+      ).then((value) {
+        _memory.set(cacheKey, value, freshTtl: Data4LibraryCacheTtl.searchFresh);
+        return value;
+      }),
     );
   }
 
@@ -159,36 +224,72 @@ class LibraryRepository {
   }) async {
     final normalized = normalizeIsbn(isbn);
     if (AppConfig.isDemoMode) return _demo.holdings(normalized);
+    final cacheKey =
+        '${AppConfig.dataMode}:holdings:isbn=${_keyPart(normalized)}:region=${_keyPart(region)}';
+    final memory = _memory.fresh<List<LibraryHolding>>(cacheKey);
+    if (memory != null) return memory;
     return _dedupe(
-      '${AppConfig.dataMode}:holdings:$normalized:$region',
-      () => _api.holdings(isbn: normalized, region: region),
+      cacheKey,
+      () => _api.holdings(isbn: normalized, region: region).then((value) {
+        _memory.set(
+          cacheKey,
+          value,
+          freshTtl: Data4LibraryCacheTtl.loanAvailabilityFresh,
+        );
+        return value;
+      }),
     );
   }
 
-  Future<List<LibraryBranch>> libraries({String? region, String? query}) async {
-    final cacheKey = '${AppConfig.dataMode}:libraries:$region:$query';
+  Future<List<LibraryBranch>> libraries({
+    String? region,
+    String? query,
+    bool forceRefresh = false,
+  }) async {
+    final cacheKey =
+        '${AppConfig.dataMode}:library-search:region=${_keyPart(region)}:query=${_keyPart(query)}:page=1:size=60';
+    if (!forceRefresh) {
+      final memory = _memory.fresh<List<LibraryBranch>>(cacheKey);
+      if (memory != null) return memory;
+    } else {
+      _memory.remove(cacheKey);
+    }
     return _dedupe(
       cacheKey,
-      () => _store.cached<List<LibraryBranch>>(
-        cacheKey,
-        const Duration(days: 7),
-        () async {
+      () {
+        Future<List<LibraryBranch>> loadFromSource() async {
           if (AppConfig.isDemoMode) {
             return _demo.libraryList(region: region, query: query);
           }
           return _api.libraries(region: region, query: query);
-        },
-        (json) => (json as List)
-            .whereType<Map>()
-            .map(
-              (e) => LibraryBranch.fromJson(
-                Map<String, dynamic>.from(e),
-                isDemo: AppConfig.isDemoMode,
-              ),
-            )
-            .toList(),
-        (value) => value.map((e) => e.toJson()).toList(),
-      ),
+        }
+
+        final future = forceRefresh
+            ? loadFromSource()
+            : _store.cached<List<LibraryBranch>>(
+                cacheKey,
+                Data4LibraryCacheTtl.librariesFresh,
+                loadFromSource,
+                (json) => (json as List)
+                    .whereType<Map>()
+                    .map(
+                      (e) => LibraryBranch.fromJson(
+                        Map<String, dynamic>.from(e),
+                        isDemo: AppConfig.isDemoMode,
+                      ),
+                    )
+                    .toList(),
+                (value) => value.map((e) => e.toJson()).toList(),
+              );
+        return future.then((value) {
+          _memory.set(
+            cacheKey,
+            value,
+            freshTtl: Data4LibraryCacheTtl.librariesFresh,
+          );
+          return value;
+        });
+      },
     );
   }
 
@@ -197,7 +298,10 @@ class LibraryRepository {
     Future<T> Function() loader,
   ) async {
     final existing = _inFlight[key];
-    if (existing != null) return existing as Future<T>;
+    if (existing != null) {
+      Data4LibraryPerfLog.inFlight(key: key);
+      return existing as Future<T>;
+    }
     final future = loader();
     _inFlight[key] = future;
     try {
@@ -205,5 +309,20 @@ class LibraryRepository {
     } finally {
       _inFlight.remove(key);
     }
+  }
+
+  List<Book> _booksFromJson(Object json) => (json as List)
+      .whereType<Map>()
+      .map(
+        (e) => Book.fromJson(
+          Map<String, dynamic>.from(e),
+          isDemo: AppConfig.isDemoMode,
+        ),
+      )
+      .toList();
+
+  String _keyPart(Object? value) {
+    final text = '${value ?? ''}'.trim();
+    return text.isEmpty ? 'all' : Uri.encodeComponent(text);
   }
 }

@@ -137,7 +137,7 @@ class DemoDataSource {
     ),
   ];
 
-  Future<List<Book>> recommendations(RecommendationPrefs prefs) async {
+  Future<List<Book>> recommendations(RecommendationPrefs prefs, {int limit = 5}) async {
     final preferred = books
         .where((b) => prefs.genres.contains(b.genre))
         .toList();
@@ -146,7 +146,7 @@ class DemoDataSource {
       ...books.where((b) => !preferred.contains(b)),
     ];
     return merged
-        .take(5)
+        .take(limit)
         .map(
           (b) => b.copyWith(
             reason:

@@ -1,5 +1,7 @@
 ﻿from datetime import datetime, timezone
 from sqlalchemy import Boolean, DateTime, Integer, String, Text, UniqueConstraint, Index
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.types import JSON
 from sqlalchemy.orm import Mapped, mapped_column
 from ..database import Base
 
@@ -57,3 +59,36 @@ class PurchaseOfferCache(Base):
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     last_success_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     stale: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
+class AnalyticsEvent(Base):
+    __tablename__ = "kl_analytics_events"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    event_id: Mapped[str] = mapped_column(String(80), unique=True, index=True)
+    anonymous_install_id: Mapped[str] = mapped_column(String(80), index=True)
+    session_id: Mapped[str] = mapped_column(String(80), index=True)
+    event_type: Mapped[str] = mapped_column(String(60), index=True)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, index=True)
+    app_version: Mapped[str] = mapped_column(String(40), default="")
+    platform: Mapped[str] = mapped_column(String(40), default="")
+    entry_source: Mapped[str] = mapped_column(String(80), default="")
+    content_type: Mapped[str] = mapped_column(String(40), default="physical_book", index=True)
+    provider: Mapped[str] = mapped_column(String(40), default="unknown", index=True)
+    isbn13: Mapped[str] = mapped_column(String(20), default="")
+    isbn10: Mapped[str] = mapped_column(String(20), default="")
+    source_item_id: Mapped[str] = mapped_column(String(160), default="")
+    title: Mapped[str] = mapped_column(String(300), default="")
+    author: Mapped[str] = mapped_column(String(240), default="")
+    displayed_price: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    original_price: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    was_lowest_price: Mapped[bool] = mapped_column(Boolean, default=False)
+    selected_format: Mapped[str] = mapped_column(String(40), default="")
+    source_screen: Mapped[str] = mapped_column(String(80), default="")
+    destination_type: Mapped[str] = mapped_column(String(80), default="")
+    event_metadata: Mapped[dict] = mapped_column("metadata", JSON().with_variant(JSONB, "postgresql"), default=dict)
+
+    __table_args__ = (
+        Index("ix_kl_analytics_event_type_occurred", "event_type", "occurred_at"),
+        Index("ix_kl_analytics_provider_content", "provider", "content_type"),
+    )

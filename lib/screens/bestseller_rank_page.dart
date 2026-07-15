@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../models/purchase_models.dart';
+import '../services/analytics_service.dart';
 import '../services/purchase_api.dart';
 import '../services/services.dart';
 import 'book_purchase_detail_page.dart';
@@ -17,6 +18,7 @@ class BestsellerRankPage extends StatefulWidget {
     required this.sourceLabel,
     required this.title,
     required this.rankingMode,
+    this.analytics,
     this.contentType = 'physical_book',
     this.category = '',
     this.readerTarget = '',
@@ -29,6 +31,7 @@ class BestsellerRankPage extends StatefulWidget {
   final String sourceLabel;
   final String title;
   final BestsellerRankingMode rankingMode;
+  final AnalyticsService? analytics;
   final String contentType;
   final String category;
   final String readerTarget;
@@ -85,12 +88,25 @@ class _BestsellerRankPageState extends State<BestsellerRankPage> {
   }
 
   void _openDetail(BestsellerBook book) {
+    final entrySource = book.contentType == 'ebook'
+        ? AnalyticsEntrySource.ebookBestseller
+        : AnalyticsEntrySource.physicalBestseller;
+    unawaited(
+      widget.analytics?.trackBestsellerOpen(
+        book: book,
+        entrySource: entrySource,
+        sourceScreen: 'bestseller_rank',
+      ),
+    );
     Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => BookPurchaseDetailPage.fromBestseller(
           book: book,
           purchaseApi: widget.purchaseApi,
           links: widget.links,
+          analytics: widget.analytics,
+          entrySource: entrySource,
+          sourceScreen: 'bestseller_rank',
         ),
       ),
     );
@@ -145,7 +161,26 @@ class _BestsellerRankPageState extends State<BestsellerRankPage> {
                   onTap: () => _openDetail(book),
                   onOpenSource: book.productUrl.isEmpty
                       ? null
-                      : () => widget.links.openWebsite(book.productUrl),
+                      : () {
+                          unawaited(
+                            widget.analytics?.track(
+                              eventType: AnalyticsEventType.outboundStoreClick,
+                              entrySource: book.contentType == 'ebook'
+                                  ? AnalyticsEntrySource.ebookBestseller
+                                  : AnalyticsEntrySource.physicalBestseller,
+                              sourceScreen: 'bestseller_rank',
+                              destinationType: 'external_store',
+                              contentType: book.contentType,
+                              provider: book.source,
+                              isbn13: book.isbn13,
+                              isbn10: book.isbn10,
+                              sourceItemId: book.sourceItemId,
+                              title: book.title,
+                              author: book.author,
+                            ),
+                          );
+                          unawaited(widget.links.openWebsite(book.productUrl));
+                        },
                 ),
               ),
           ],

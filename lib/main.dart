@@ -11,6 +11,7 @@ import 'models/loan_alert.dart';
 import 'models/purchase_models.dart';
 import 'repositories/library_repository.dart';
 import 'services/services.dart';
+import 'services/analytics_service.dart';
 import 'services/loan_alert_service.dart';
 import 'services/purchase_api.dart';
 import 'screens/book_purchase_detail_page.dart';
@@ -76,6 +77,7 @@ class AppState extends ChangeNotifier {
   final links = ExternalLinkService();
   final purchaseApi = PurchaseApiClient();
   final loanAlerts = LoanAlertService();
+  final analytics = AnalyticsService();
 
   RecommendationPrefs prefs = const RecommendationPrefs();
   String region = '서울특별시';
@@ -97,6 +99,9 @@ class AppState extends ChangeNotifier {
   bool loading = true;
   String? bannerMessage;
   List<LoanAlertItem> loanAlertItems = const [];
+  int _recommendationRequestId = 0;
+  int _popularRequestId = 0;
+  int _librariesRequestId = 0;
 
   Future<void> init() async {
     loading = true;
@@ -105,6 +110,8 @@ class AppState extends ChangeNotifier {
     region = await store.loadRegion();
     popularAge = prefs.ageGroup;
     popularGender = prefs.gender;
+    await analytics.initialize();
+    unawaited(analytics.flush());
     await loanAlerts.initialize();
     await loanAlerts.checkDueItems();
     await reloadLocal();
@@ -114,7 +121,11 @@ class AppState extends ChangeNotifier {
   }
 
   Future<void> refreshRemote() async {
-    await Future.wait([loadRecommendations(), loadPopular(), loadLibraries()]);
+    await Future.wait([
+      loadRecommendations(forceRefresh: true),
+      loadPopular(forceRefresh: true),
+      loadLibraries(forceRefresh: true),
+    ]);
   }
 
   Future<void> reloadLocal() async {
@@ -141,20 +152,25 @@ class AppState extends ChangeNotifier {
   }
 
   Future<void> loadRecommendations({bool forceRefresh = false}) async {
+    final requestId = ++_recommendationRequestId;
     recommendationsLoading = true;
     if (forceRefresh) recommendations = const [];
     notifyListeners();
     try {
-      recommendations = await repo.recommendations(
+      final next = await repo.recommendations(
         prefs,
         period: popularPeriod,
         forceRefresh: forceRefresh,
       );
+      if (requestId != _recommendationRequestId) return;
+      recommendations = next;
       bannerMessage = null;
     } catch (e) {
+      if (requestId != _recommendationRequestId) return;
       recommendations = const [];
       bannerMessage = '추천 데이터를 불러오지 못했습니다. API 키와 네트워크를 확인해 주세요.';
     } finally {
+      if (requestId != _recommendationRequestId) return;
       recommendationsLoading = false;
       notifyListeners();
     }
@@ -167,6 +183,7 @@ class AppState extends ChangeNotifier {
     String? period,
     bool forceRefresh = false,
   }) async {
+    final requestId = ++_popularRequestId;
     popularAge = ageGroup ?? popularAge;
     popularGender = gender ?? popularGender;
     popularGenre = genre ?? popularGenre;
@@ -175,18 +192,22 @@ class AppState extends ChangeNotifier {
     if (forceRefresh) popular = const [];
     notifyListeners();
     try {
-      popular = await repo.popularBooks(
+      final next = await repo.popularBooks(
         ageGroup: popularAge,
         gender: popularGender,
         genre: popularGenre,
         period: popularPeriod,
         forceRefresh: forceRefresh,
       );
+      if (requestId != _popularRequestId) return;
+      popular = next;
       bannerMessage = null;
     } catch (e) {
+      if (requestId != _popularRequestId) return;
       popular = const [];
       bannerMessage = '인기 대출도서를 불러오지 못했습니다. API 키와 네트워크를 확인해 주세요.';
     } finally {
+      if (requestId != _popularRequestId) return;
       popularLoading = false;
       notifyListeners();
     }
@@ -206,9 +227,15 @@ class AppState extends ChangeNotifier {
     return repo.holdings(book.isbn, region: region);
   }
 
-  Future<void> loadLibraries({String? query}) async {
+  Future<void> loadLibraries({String? query, bool forceRefresh = false}) async {
+    final requestId = ++_librariesRequestId;
     try {
-      final data = await repo.libraries(region: region, query: query);
+      final data = await repo.libraries(
+        region: region,
+        query: query,
+        forceRefresh: forceRefresh,
+      );
+      if (requestId != _librariesRequestId) return;
       libraries = distance.rankLibraries(
         data,
         userLat: userLat,
@@ -216,9 +243,11 @@ class AppState extends ChangeNotifier {
       );
       bannerMessage = null;
     } catch (e) {
+      if (requestId != _librariesRequestId) return;
       libraries = const [];
       bannerMessage = '도서관 목록을 불러오지 못했습니다. API 키와 네트워크를 확인해 주세요.';
     }
+    if (requestId != _librariesRequestId) return;
     notifyListeners();
   }
 
@@ -282,13 +311,23 @@ class AppState extends ChangeNotifier {
   }
 
   Future<void> toggleLibrary(LibraryBranch library) async {
+    final willSave = !isFavoriteLibrary(library);
     await store.toggleFavoriteLibrary(library);
     await reloadLocal();
+    unawaited(
+      analytics.trackLibraryToggle(saved: willSave, libraryId: library.id),
+    );
   }
 
   bool isFavoriteBook(Book book) => favoriteBooks.any((e) => e.id == book.id);
   bool isFavoriteLibrary(LibraryBranch library) =>
       favoriteLibraries.any((e) => e.id == library.id);
+
+  @override
+  void dispose() {
+    repo.close();
+    super.dispose();
+  }
 }
 
 class AppShell extends StatefulWidget {
@@ -308,6 +347,12 @@ class _AppShellState extends State<AppShell> {
   }
 
   @override
+  void dispose() {
+    state.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     return AnimatedBuilder(
       animation: state,
@@ -315,12 +360,13 @@ class _AppShellState extends State<AppShell> {
         final page = switch (index) {
           0 => HomePage(
             state: state,
-            openSearch: () => setState(() => index = 1),
+            openSearch: () => Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => SearchPage(state: state)),
+            ),
           ),
-          1 => SearchPage(state: state),
-          2 => LibrariesPage(state: state),
-          3 => ShelfPage(state: state),
-          4 => PurchasePage(state: state),
+          1 => LibrariesPage(state: state),
+          2 => ShelfPage(state: state),
+          3 => PurchasePage(state: state),
           _ => SettingsPage(state: state),
         };
         return Scaffold(
@@ -350,7 +396,6 @@ class _AppShellState extends State<AppShell> {
                 selectedIcon: Icon(Icons.home),
                 label: '홈',
               ),
-              NavigationDestination(icon: Icon(Icons.search), label: '검색'),
               NavigationDestination(
                 icon: Icon(Icons.local_library_outlined),
                 selectedIcon: Icon(Icons.local_library),
@@ -457,6 +502,14 @@ class _HomePageState extends State<HomePage> {
     });
   }
 
+  void _openHomeBookList(HomeBookListMode mode) {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => HomeBookListPage(mode: mode, state: state),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return RefreshIndicator(
@@ -497,10 +550,18 @@ class _HomePageState extends State<HomePage> {
               icon: Icons.auto_stories_outlined,
               title: '추천 결과가 없습니다',
             )
-          else
-            ...state.recommendations.map(
-              (book) => BookTile(book: book, state: state),
+          else ...[
+            ...dedupeBooks(state.recommendations).take(5).map(
+              (book) => BookTile(
+                book: book,
+                state: state,
+                analyticsEventType: AnalyticsEventType.homeBookOpen,
+                entrySource: AnalyticsEntrySource.homeRecommendation,
+                sourceScreen: 'home',
+              ),
             ),
+            _MoreButton(onTap: () => _openHomeBookList(HomeBookListMode.recommendation)),
+          ],
           const SizedBox(height: 18),
           SectionHeader(
             title: '인기 대출도서',
@@ -529,12 +590,20 @@ class _HomePageState extends State<HomePage> {
               icon: Icons.leaderboard_outlined,
               title: '인기 대출도서가 없습니다',
             )
-          else
-            ...state.popular
-                .take(8)
-                .map(
-                  (book) => BookTile(book: book, state: state, showRank: true),
-                ),
+          else ...[
+            ...rankedBooks(dedupeBooks(state.popular).take(5)).map(
+              (entry) => BookTile(
+                book: entry.book,
+                state: state,
+                showRank: true,
+                displayRank: entry.displayRank,
+                analyticsEventType: AnalyticsEventType.homeBookOpen,
+                entrySource: AnalyticsEntrySource.homePopularLoan,
+                sourceScreen: 'home',
+              ),
+            ),
+            _MoreButton(onTap: () => _openHomeBookList(HomeBookListMode.popularLoan)),
+          ],
           const SizedBox(height: 18),
           SectionHeader(
             title: '가까운 도서관',
@@ -556,6 +625,205 @@ class _HomePageState extends State<HomePage> {
     );
   }
 }
+
+enum HomeBookListMode { recommendation, popularLoan }
+
+class HomeBookListPage extends StatefulWidget {
+  const HomeBookListPage({required this.mode, required this.state, super.key});
+
+  final HomeBookListMode mode;
+  final AppState state;
+
+  @override
+  State<HomeBookListPage> createState() => _HomeBookListPageState();
+}
+
+class _HomeBookListPageState extends State<HomeBookListPage> {
+  late Future<List<Book>> future;
+
+  @override
+  void initState() {
+    super.initState();
+    future = _load();
+  }
+
+  Future<List<Book>> _load() {
+    return switch (widget.mode) {
+      HomeBookListMode.recommendation => widget.state.repo.recommendations(
+        widget.state.prefs,
+        period: widget.state.popularPeriod,
+        limit: 50,
+      ),
+      HomeBookListMode.popularLoan => widget.state.repo.popularBooks(
+        ageGroup: widget.state.popularAge,
+        gender: widget.state.popularGender,
+        genre: widget.state.popularGenre,
+        period: widget.state.popularPeriod,
+        pageSize: 50,
+      ),
+    };
+  }
+
+  String get _title => switch (widget.mode) {
+    HomeBookListMode.recommendation => '맞춤 도서 추천',
+    HomeBookListMode.popularLoan => '인기 대출도서',
+  };
+
+  String get _emptyTitle => switch (widget.mode) {
+    HomeBookListMode.recommendation => '조건에 맞는 추천 도서가 없습니다.',
+    HomeBookListMode.popularLoan => '조건에 맞는 인기 대출도서가 없습니다.',
+  };
+
+  String get _errorTitle => switch (widget.mode) {
+    HomeBookListMode.recommendation => '추천 도서를 불러오지 못했습니다.',
+    HomeBookListMode.popularLoan => '인기 대출도서를 불러오지 못했습니다.',
+  };
+
+  Future<void> _retry() async {
+    setState(() {
+      future = _load();
+    });
+    await future;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: Text(_title)),
+      body: RefreshIndicator(
+        onRefresh: _retry,
+        child: FutureBuilder<List<Book>>(
+          future: future,
+          builder: (context, snapshot) {
+            if (snapshot.connectionState == ConnectionState.waiting) {
+              return ListView(
+                padding: const EdgeInsets.all(24),
+                children: const [
+                  Center(child: CircularProgressIndicator()),
+                  SizedBox(height: 12),
+                  Center(child: Text('도서를 불러오는 중입니다.')),
+                ],
+              );
+            }
+            if (snapshot.hasError) {
+              return ListView(
+                padding: const EdgeInsets.fromLTRB(16, 24, 16, 24),
+                children: [
+                  StateBox(
+                    icon: Icons.error_outline,
+                    title: _errorTitle,
+                    action: '다시 시도',
+                    onTap: _retry,
+                  ),
+                ],
+              );
+            }
+            final books = dedupeBooks(snapshot.data ?? const <Book>[]);
+            if (books.isEmpty) {
+              return ListView(
+                padding: const EdgeInsets.fromLTRB(16, 24, 16, 24),
+                children: [
+                  StateBox(
+                    icon: Icons.auto_stories_outlined,
+                    title: _emptyTitle,
+                  ),
+                ],
+              );
+            }
+            final entries = rankedBooks(books);
+            return ListView.builder(
+              key: PageStorageKey('home:${widget.mode.name}'),
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+              itemCount: entries.length,
+              itemBuilder: (context, index) {
+                final entry = entries[index];
+                return BookTile(
+                  book: entry.book,
+                  state: widget.state,
+                  showRank: widget.mode == HomeBookListMode.popularLoan,
+                  displayRank: entry.displayRank,
+                  analyticsEventType: AnalyticsEventType.homeBookOpen,
+                  entrySource: widget.mode == HomeBookListMode.recommendation
+                      ? AnalyticsEntrySource.homeRecommendation
+                      : AnalyticsEntrySource.homePopularLoan,
+                  sourceScreen: 'home_more',
+                );
+              },
+            );
+          },
+        ),
+      ),
+    );
+  }
+}
+
+class _MoreButton extends StatelessWidget {
+  const _MoreButton({required this.onTap});
+
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Align(
+      alignment: Alignment.centerRight,
+      child: TextButton.icon(
+        onPressed: onTap,
+        icon: const Icon(Icons.chevron_right),
+        label: const Text('더보기'),
+      ),
+    );
+  }
+}
+
+class RankedBook {
+  const RankedBook({required this.book, required this.displayRank});
+
+  final Book book;
+  final int displayRank;
+}
+
+List<RankedBook> rankedBooks(Iterable<Book> books) {
+  final list = books.toList();
+  return [
+    for (var i = 0; i < list.length; i++)
+      RankedBook(book: list[i], displayRank: i + 1),
+  ];
+}
+
+List<Book> dedupeBooks(Iterable<Book> source) {
+  final selected = <String, Book>{};
+  for (final book in source) {
+    final key = dedupeBookKey(book);
+    final existing = selected[key];
+    if (existing == null || _bookCompleteness(book) > _bookCompleteness(existing)) {
+      selected[key] = book;
+    }
+  }
+  return selected.values.toList();
+}
+
+String dedupeBookKey(Book book) {
+  final isbn = normalizeIsbn(book.isbn);
+  if (isbn.length >= 13) return 'isbn13:${isbn.substring(0, 13)}';
+  if (isbn.length >= 10) return 'isbn10:${isbn.substring(0, 10)}';
+  if (book.id.trim().isNotEmpty) return 'id:${book.id.trim()}';
+  return 'title:${_normalizeBookText(book.title)}:${_normalizeBookText(book.author)}';
+}
+
+int _bookCompleteness(Book book) {
+  var score = 0;
+  if (normalizeIsbn(book.isbn).isNotEmpty) score += 4;
+  if ((book.coverUrl ?? '').isNotEmpty) score += 3;
+  if ((book.detailUrl ?? '').isNotEmpty) score += 2;
+  if (book.loanCount != null) score += 1;
+  return score;
+}
+
+String _normalizeBookText(String value) => value
+    .replaceAll(RegExp(r'<[^>]+>'), ' ')
+    .replaceAll(RegExp(r'\s+'), ' ')
+    .trim()
+    .toLowerCase();
 
 class SearchPage extends StatefulWidget {
   const SearchPage({required this.state, super.key});
@@ -670,7 +938,15 @@ class _SearchPageState extends State<SearchPage> {
         else if (controller.text.isNotEmpty && results.isEmpty)
           const StateBox(icon: Icons.search_off, title: '검색 결과가 없습니다')
         else
-          ...results.map((book) => BookTile(book: book, state: widget.state)),
+          ...results.map(
+            (book) => BookTile(
+              book: book,
+              state: widget.state,
+              analyticsEventType: AnalyticsEventType.librarySearchResultOpen,
+              entrySource: AnalyticsEntrySource.librarySearch,
+              sourceScreen: 'library_search',
+            ),
+          ),
       ],
     );
   }
@@ -856,11 +1132,37 @@ class BookTile extends StatelessWidget {
     required this.book,
     required this.state,
     this.showRank = false,
+    this.displayRank,
+    this.analyticsEventType = '',
+    this.entrySource = '',
+    this.sourceScreen = '',
     super.key,
   });
   final Book book;
   final AppState state;
   final bool showRank;
+  final int? displayRank;
+  final String analyticsEventType;
+  final String entrySource;
+  final String sourceScreen;
+
+  void _openDetail(BuildContext context) {
+    if (analyticsEventType.isNotEmpty) {
+      unawaited(
+        state.analytics.trackBookOpen(
+          eventType: analyticsEventType,
+          entrySource: entrySource,
+          sourceScreen: sourceScreen,
+          book: book,
+        ),
+      );
+    }
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => BookDetailPage(book: book, state: state),
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -869,7 +1171,10 @@ class BookTile extends StatelessWidget {
       child: Card(
         child: ListTile(
           contentPadding: const EdgeInsets.all(12),
-          leading: BookCover(book: book, rank: showRank ? book.rank : null),
+          leading: BookCover(
+            book: book,
+            rank: showRank ? displayRank ?? book.rank : null,
+          ),
           title: Text(book.title, maxLines: 2, overflow: TextOverflow.ellipsis),
           subtitle: Text(
             '${book.author}\n${book.publisher} ${book.publishYear} · ISBN ${book.isbn}\n${book.reason}',
@@ -886,11 +1191,7 @@ class BookTile extends StatelessWidget {
             ),
             onPressed: () => state.toggleBook(book),
           ),
-          onTap: () => Navigator.of(context).push(
-            MaterialPageRoute(
-              builder: (_) => BookDetailPage(book: book, state: state),
-            ),
-          ),
+          onTap: () => _openDetail(context),
         ),
       ),
     );
@@ -994,6 +1295,9 @@ class _BookDetailPageState extends State<BookDetailPage> {
                       book: widget.book,
                       purchaseApi: widget.state.purchaseApi,
                       links: widget.state.links,
+                      analytics: widget.state.analytics,
+                      entrySource: AnalyticsEntrySource.libraryDetail,
+                      sourceScreen: 'book_detail',
                     ),
                   ),
                 ),
@@ -1360,6 +1664,8 @@ class BookCover extends StatelessWidget {
                 width: width,
                 height: height,
                 fit: BoxFit.cover,
+                loadingBuilder: (context, child, progress) =>
+                    progress == null ? child : const Icon(Icons.menu_book, size: 28),
                 errorBuilder: (context, error, stackTrace) =>
                     const Icon(Icons.menu_book, size: 28),
               )
@@ -1880,12 +2186,25 @@ class _PurchasePageState extends State<PurchasePage> {
   }
 
   void _openBestsellerDetail(BestsellerBook book) {
+    final entrySource = book.contentType == 'ebook'
+        ? AnalyticsEntrySource.ebookBestseller
+        : AnalyticsEntrySource.physicalBestseller;
+    unawaited(
+      widget.state.analytics.trackBestsellerOpen(
+        book: book,
+        entrySource: entrySource,
+        sourceScreen: 'purchase_tab',
+      ),
+    );
     Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => BookPurchaseDetailPage.fromBestseller(
           book: book,
           purchaseApi: widget.state.purchaseApi,
           links: widget.state.links,
+          analytics: widget.state.analytics,
+          entrySource: entrySource,
+          sourceScreen: 'purchase_tab',
         ),
       ),
     );
@@ -1895,11 +2214,24 @@ class _PurchasePageState extends State<PurchasePage> {
     final value = rawValue.trim();
     if (value.isEmpty) return;
     final isbn = value.replaceAll(RegExp(r'[^0-9Xx]'), '');
+    unawaited(
+      widget.state.analytics.track(
+        eventType: AnalyticsEventType.purchaseSearchResultOpen,
+        entrySource: AnalyticsEntrySource.purchaseSearch,
+        sourceScreen: 'purchase_tab',
+        contentType: selectedContentType,
+        isbn13: isbn.length == 13 ? isbn : '',
+        isbn10: isbn.length == 10 ? isbn : '',
+      ),
+    );
     Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => BookPurchaseDetailPage(
           purchaseApi: widget.state.purchaseApi,
           links: widget.state.links,
+          analytics: widget.state.analytics,
+          entrySource: AnalyticsEntrySource.purchaseSearch,
+          sourceScreen: 'purchase_tab',
           isbn13: isbn.length == 13 ? isbn : '',
           isbn10: isbn.length == 10 ? isbn : '',
           title: value,
@@ -1907,6 +2239,27 @@ class _PurchasePageState extends State<PurchasePage> {
         ),
       ),
     );
+  }
+
+  void _openBestsellerSource(BestsellerBook book) {
+    unawaited(
+      widget.state.analytics.track(
+        eventType: AnalyticsEventType.outboundStoreClick,
+        entrySource: book.contentType == 'ebook'
+            ? AnalyticsEntrySource.ebookBestseller
+            : AnalyticsEntrySource.physicalBestseller,
+        sourceScreen: 'purchase_tab',
+        destinationType: 'external_store',
+        contentType: book.contentType,
+        provider: book.source,
+        isbn13: book.isbn13,
+        isbn10: book.isbn10,
+        sourceItemId: book.sourceItemId,
+        title: book.title,
+        author: book.author,
+      ),
+    );
+    unawaited(widget.state.links.openWebsite(book.productUrl));
   }
 
   void _openMore({required bool readerTarget}) {
@@ -1917,6 +2270,7 @@ class _PurchasePageState extends State<PurchasePage> {
         builder: (_) => BestsellerRankPage(
           purchaseApi: widget.state.purchaseApi,
           links: widget.state.links,
+          analytics: widget.state.analytics,
           source: selectedSource,
           sourceLabel: _sourceLabel,
           title: '$titlePrefix 베스트셀러',
@@ -2025,8 +2379,7 @@ class _PurchasePageState extends State<PurchasePage> {
           lastUpdated: genreLastUpdated,
           onMore: () => _openMore(readerTarget: false),
           onSelect: _openBestsellerDetail,
-          onOpenSource: (book) =>
-              widget.state.links.openWebsite(book.productUrl),
+          onOpenSource: _openBestsellerSource,
         ),
         const SizedBox(height: 18),
         if (targetEnabled) ...[
@@ -2056,8 +2409,7 @@ class _PurchasePageState extends State<PurchasePage> {
             lastUpdated: readerTargetLastUpdated,
             onMore: () => _openMore(readerTarget: true),
             onSelect: _openBestsellerDetail,
-            onOpenSource: (book) =>
-                widget.state.links.openWebsite(book.productUrl),
+            onOpenSource: _openBestsellerSource,
           ),
           const SizedBox(height: 12),
         ] else if (_isEbook)

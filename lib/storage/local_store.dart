@@ -1,7 +1,9 @@
 import 'dart:convert';
+import 'dart:async';
 
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../data/data4library_cache.dart';
 import '../models/models.dart';
 
 class LocalStore {
@@ -114,16 +116,47 @@ class LocalStore {
     Future<T> Function() loader,
     T Function(Object json) fromJson,
     Object Function(T value) toJson,
+    {
+    Duration? staleTtl,
+    bool refreshStaleInBackground = false,
+  }
   ) async {
     final prefs = await _prefs;
     final raw = prefs.getString('$_cachePrefix$key');
     if (raw != null) {
-      final decoded = jsonDecode(raw) as Map<String, dynamic>;
-      final savedAt = DateTime.tryParse(decoded['savedAt']?.toString() ?? '');
-      if (savedAt != null && DateTime.now().difference(savedAt) < ttl) {
-        return fromJson(decoded['value'] as Object);
+      try {
+        final decoded = jsonDecode(raw) as Map<String, dynamic>;
+        final savedAt = DateTime.tryParse(decoded['savedAt']?.toString() ?? '');
+        if (savedAt != null) {
+          final age = DateTime.now().difference(savedAt);
+          if (age < ttl) {
+            Data4LibraryPerfLog.cache(key: key, status: 'persistent-hit');
+            return fromJson(decoded['value'] as Object);
+          }
+          if (staleTtl != null && age < staleTtl) {
+            Data4LibraryPerfLog.cache(key: key, status: 'persistent-stale');
+            final stale = fromJson(decoded['value'] as Object);
+            if (refreshStaleInBackground) {
+              unawaited(
+                loader().then((value) {
+                  return prefs.setString(
+                    '$_cachePrefix$key',
+                    jsonEncode({
+                      'savedAt': DateTime.now().toIso8601String(),
+                      'value': toJson(value),
+                    }),
+                  );
+                }).catchError((_) => false),
+              );
+            }
+            return stale;
+          }
+        }
+      } catch (_) {
+        await prefs.remove('$_cachePrefix$key');
       }
     }
+    Data4LibraryPerfLog.cache(key: key, status: 'miss');
     final value = await loader();
     await prefs.setString(
       '$_cachePrefix$key',

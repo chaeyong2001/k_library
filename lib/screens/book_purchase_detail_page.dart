@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../models/models.dart';
 import '../models/purchase_models.dart';
+import '../services/analytics_service.dart';
 import '../services/purchase_api.dart';
 import '../services/services.dart';
 
@@ -20,6 +21,9 @@ class BookPurchaseDetailPage extends StatefulWidget {
     this.publicationDate = '',
     this.sourceProductUrl = '',
     this.contentType = 'physical_book',
+    this.analytics,
+    this.entrySource = '',
+    this.sourceScreen = '',
     super.key,
   });
 
@@ -27,9 +31,15 @@ class BookPurchaseDetailPage extends StatefulWidget {
     required BestsellerBook book,
     required PurchaseApiClient purchaseApi,
     required ExternalLinkService links,
+    AnalyticsService? analytics,
+    String entrySource = '',
+    String sourceScreen = '',
   }) => BookPurchaseDetailPage(
     purchaseApi: purchaseApi,
     links: links,
+    analytics: analytics,
+    entrySource: entrySource,
+    sourceScreen: sourceScreen,
     isbn13: book.isbn13,
     isbn10: book.isbn10,
     title: book.title,
@@ -45,11 +55,17 @@ class BookPurchaseDetailPage extends StatefulWidget {
     required Book book,
     required PurchaseApiClient purchaseApi,
     required ExternalLinkService links,
+    AnalyticsService? analytics,
+    String entrySource = AnalyticsEntrySource.libraryDetail,
+    String sourceScreen = 'book_detail',
   }) {
     final isbn = book.isbn.replaceAll(RegExp(r'[^0-9Xx]'), '');
     return BookPurchaseDetailPage(
       purchaseApi: purchaseApi,
       links: links,
+      analytics: analytics,
+      entrySource: entrySource,
+      sourceScreen: sourceScreen,
       isbn13: isbn.length == 13 ? isbn : '',
       isbn10: isbn.length == 10 ? isbn : '',
       title: book.title,
@@ -72,6 +88,9 @@ class BookPurchaseDetailPage extends StatefulWidget {
   final String publicationDate;
   final String sourceProductUrl;
   final String contentType;
+  final AnalyticsService? analytics;
+  final String entrySource;
+  final String sourceScreen;
 
   @override
   State<BookPurchaseDetailPage> createState() => _BookPurchaseDetailPageState();
@@ -88,6 +107,7 @@ class _BookPurchaseDetailPageState extends State<BookPurchaseDetailPage> {
     selectedContentType = widget.contentType == 'ebook'
         ? 'ebook'
         : 'physical_book';
+    _trackDetailOpen();
     unawaited(_loadOffers(selectedContentType));
   }
 
@@ -197,17 +217,114 @@ class _BookPurchaseDetailPageState extends State<BookPurchaseDetailPage> {
   Future<void> _changeContentType(String value) async {
     if (value == selectedContentType) return;
     setState(() => selectedContentType = value);
+    unawaited(
+      widget.analytics?.track(
+        eventType: AnalyticsEventType.formatTabChange,
+        entrySource: widget.entrySource,
+        sourceScreen: widget.sourceScreen,
+        contentType: value,
+        isbn13: _summaryIsbn.length == 13 ? _summaryIsbn : widget.isbn13,
+        isbn10: _summaryIsbn.length == 10 ? _summaryIsbn : widget.isbn10,
+        title: _analyticsTitle,
+        author: _analyticsAuthor,
+        selectedFormat: value,
+      ),
+    );
     await _loadOffers(value);
   }
 
   Future<void> _selectCandidate(PurchaseFormatCandidate candidate) async {
     _selectedCandidates[selectedContentType] = candidate;
+    unawaited(
+      widget.analytics?.track(
+        eventType: AnalyticsEventType.alternateFormatCandidateOpen,
+        entrySource: AnalyticsEntrySource.alternateFormatCandidate,
+        sourceScreen: widget.sourceScreen,
+        contentType: candidate.contentType,
+        provider: 'aladin',
+        isbn13: candidate.isbn13,
+        sourceItemId: candidate.sourceItemId,
+        title: candidate.title,
+        author: candidate.author,
+        displayedPrice: candidate.price,
+        originalPrice: candidate.originalPrice,
+        selectedFormat: candidate.contentType,
+        metadata: {'match_score': candidate.matchScore},
+      ),
+    );
     await _loadOffers(selectedContentType, force: true);
   }
 
   Future<void> _clearSelectedCandidate() async {
     _selectedCandidates.remove(selectedContentType);
     await _loadOffers(selectedContentType, force: true);
+  }
+
+  String get _analyticsTitle =>
+      widget.entrySource == AnalyticsEntrySource.purchaseSearch
+      ? ''
+      : _summaryTitle;
+
+  String get _analyticsAuthor =>
+      widget.entrySource == AnalyticsEntrySource.purchaseSearch
+      ? ''
+      : _summaryAuthor;
+
+  void _trackDetailOpen() {
+    unawaited(
+      widget.analytics?.track(
+        eventType: AnalyticsEventType.purchaseDetailOpen,
+        entrySource: widget.entrySource,
+        sourceScreen: widget.sourceScreen,
+        contentType: selectedContentType,
+        isbn13: widget.isbn13,
+        isbn10: widget.isbn10,
+        title: widget.entrySource == AnalyticsEntrySource.purchaseSearch
+            ? ''
+            : widget.title,
+        author: widget.entrySource == AnalyticsEntrySource.purchaseSearch
+            ? ''
+            : widget.author,
+        selectedFormat: selectedContentType,
+      ),
+    );
+  }
+
+  void _openOffer(
+    PurchaseOffer offer, {
+    required bool isLowest,
+    required int comparableOfferCount,
+  }) {
+    final comparablePrice = _comparablePrice(offer);
+    final isComparableLowest =
+        isLowest && comparablePrice != null && comparableOfferCount > 1;
+    unawaited(
+      widget.analytics?.track(
+        eventType: isComparableLowest
+            ? AnalyticsEventType.lowestPriceClick
+            : AnalyticsEventType.outboundStoreClick,
+        entrySource: widget.entrySource,
+        sourceScreen: widget.sourceScreen,
+        destinationType: 'external_store',
+        contentType: offer.contentType.isEmpty
+            ? selectedContentType
+            : offer.contentType,
+        provider: offer.provider,
+        isbn13: offer.isbn13.isNotEmpty ? offer.isbn13 : _summaryIsbn,
+        title: _analyticsTitle,
+        author: _analyticsAuthor,
+        displayedPrice: comparablePrice,
+        originalPrice: offer.originalPrice,
+        wasLowestPrice: isLowest,
+        selectedFormat: selectedContentType,
+        metadata: {
+          'offer_type': offer.offerType,
+          'merchant_name': offer.merchantName,
+          'matched_by': offer.matchedBy,
+        },
+      ),
+    );
+    unawaited(widget.links.openWebsite(offer.productUrl));
   }
 
   @override
@@ -272,7 +389,11 @@ class _BookPurchaseDetailPageState extends State<BookPurchaseDetailPage> {
                     lowestLabel: pricedOffers.length == 1
                         ? '현재 확인된 가격'
                         : '현재 확인된 최저가',
-                    openUrl: widget.links.openWebsite,
+                    onOpen: (offer) => _openOffer(
+                      offer,
+                      isLowest: identical(offer, lowestOffer),
+                      comparableOfferCount: pricedOffers.length,
+                    ),
                     contentType: selectedContentType,
                   ),
                 ),
@@ -294,7 +415,11 @@ class _BookPurchaseDetailPageState extends State<BookPurchaseDetailPage> {
                     offer: offer,
                     isLowest: false,
                     lowestLabel: '',
-                    openUrl: widget.links.openWebsite,
+                    onOpen: (offer) => _openOffer(
+                      offer,
+                      isLowest: false,
+                      comparableOfferCount: pricedOffers.length,
+                    ),
                     contentType: selectedContentType,
                   ),
                 ),
@@ -664,14 +789,14 @@ class _PurchaseOfferCard extends StatelessWidget {
     required this.offer,
     required this.isLowest,
     required this.lowestLabel,
-    required this.openUrl,
+    required this.onOpen,
     required this.contentType,
   });
 
   final PurchaseOffer offer;
   final bool isLowest;
   final String lowestLabel;
-  final Future<void> Function(String url) openUrl;
+  final ValueChanged<PurchaseOffer> onOpen;
   final String contentType;
 
   @override
@@ -731,7 +856,7 @@ class _PurchaseOfferCard extends StatelessWidget {
               child: FilledButton.tonalIcon(
                 onPressed: offer.productUrl.isEmpty
                     ? null
-                    : () => openUrl(offer.productUrl),
+                    : () => onOpen(offer),
                 icon: const Icon(Icons.open_in_new),
                 label: Text(actionText),
               ),

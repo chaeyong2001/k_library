@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 
 import '../config/app_config.dart';
+import 'data4library_cache.dart';
 import '../config/genre_mapping.dart';
 import '../models/models.dart';
 
@@ -25,6 +26,8 @@ class Data4LibraryApiClient {
     : _client = client ?? http.Client();
 
   final http.Client _client;
+
+  void close() => _client.close();
 
   Uri _uri(String path, Map<String, String?> query) =>
       Uri.parse('${AppConfig.data4LibraryBaseUrl}/$path').replace(
@@ -53,10 +56,18 @@ class Data4LibraryApiClient {
       'pageNo': '$page',
       'pageSize': '$pageSize',
     });
-    final json = await _getJson(uri);
-    return _extractWrappedList(json, 'docs', 'doc')
+    final json = await _getJson(
+      uri,
+      endpoint: 'popular-loan',
+      detail: 'page=$page size=$pageSize',
+    );
+    final parse = Stopwatch()..start();
+    final books = _extractWrappedList(json, 'docs', 'doc')
         .map((e) => Book.fromJson(e, reason: _reason(filter), isDemo: false))
         .toList();
+    parse.stop();
+    _logParse(endpoint: 'popular-loan-map', parseMs: parse.elapsedMilliseconds);
+    return books;
   }
 
   Future<List<Book>> searchBooks(
@@ -72,12 +83,20 @@ class Data4LibraryApiClient {
       'pageNo': '$page',
       'pageSize': '$pageSize',
     });
-    final json = await _getJson(uri);
-    return _extractWrappedList(
+    final json = await _getJson(
+      uri,
+      endpoint: 'book-search',
+      detail: 'page=$page size=$pageSize',
+    );
+    final parse = Stopwatch()..start();
+    final books = _extractWrappedList(
       json,
       'docs',
       'doc',
     ).map((e) => Book.fromJson(e, isDemo: false)).toList();
+    parse.stop();
+    _logParse(endpoint: 'book-search-map', parseMs: parse.elapsedMilliseconds);
+    return books;
   }
 
   Future<List<LibraryBranch>> librariesByBook({
@@ -94,12 +113,23 @@ class Data4LibraryApiClient {
       'pageNo': '1',
       'pageSize': '$pageSize',
     });
-    final json = await _getJson(uri);
-    return _extractWrappedList(
+    final json = await _getJson(
+      uri,
+      endpoint: 'libraries-by-book',
+      detail: 'isbn=${_safeIsbn(normalized)} size=$pageSize',
+    );
+    final parse = Stopwatch()..start();
+    final libraries = _extractWrappedList(
       json,
       'libs',
       'lib',
     ).map((e) => LibraryBranch.fromJson(e, isDemo: false)).toList();
+    parse.stop();
+    _logParse(
+      endpoint: 'libraries-by-book-map',
+      parseMs: parse.elapsedMilliseconds,
+    );
+    return libraries;
   }
 
   Future<LoanStatus> bookExist({
@@ -112,7 +142,11 @@ class Data4LibraryApiClient {
       return LoanStatus.checkRequired;
     }
     final uri = _uri('bookExist', {'isbn13': normalized, 'libCode': libCode});
-    final json = await _getJson(uri);
+    final json = await _getJson(
+      uri,
+      endpoint: 'loan-availability',
+      detail: 'isbn=${_safeIsbn(normalized)} lib=$libCode',
+    );
     final result =
         (((json['response'] as Map?)?['result']) as Map?)
             ?.cast<String, dynamic>() ??
@@ -129,20 +163,37 @@ class Data4LibraryApiClient {
     required String isbn,
     required String region,
   }) async {
+    final total = Stopwatch()..start();
     final libs = await librariesByBook(isbn: isbn, region: region);
     final limited = libs.take(24).toList();
     final checked = <LibraryHolding>[];
-    for (final lib in limited) {
-      LoanStatus status;
-      try {
-        status = await bookExist(isbn: isbn, libCode: lib.id);
-      } catch (_) {
-        status = LoanStatus.checkRequired;
-      }
-      checked.add(
-        LibraryHolding(library: lib, status: status, checkedAt: DateTime.now()),
+    for (var index = 0; index < limited.length; index += 4) {
+      final batch = limited.skip(index).take(4).toList();
+      final results = await Future.wait(
+        batch.map((lib) async {
+          LoanStatus status;
+          try {
+            status = await bookExist(isbn: isbn, libCode: lib.id);
+          } catch (_) {
+            status = LoanStatus.checkRequired;
+          }
+          return LibraryHolding(
+            library: lib,
+            status: status,
+            checkedAt: DateTime.now(),
+          );
+        }),
       );
+      checked.addAll(results);
     }
+    total.stop();
+    Data4LibraryPerfLog.request(
+      endpoint: 'book-detail-holdings',
+      httpMs: total.elapsedMilliseconds,
+      parseMs: 0,
+      totalMs: total.elapsedMilliseconds,
+      detail: 'libraries=${limited.length}',
+    );
     return checked;
   }
 
@@ -158,24 +209,50 @@ class Data4LibraryApiClient {
       'pageNo': '$page',
       'pageSize': '$pageSize',
     });
-    final json = await _getJson(uri);
+    final json = await _getJson(
+      uri,
+      endpoint: 'library-search',
+      detail: 'page=$page size=$pageSize',
+    );
+    final parse = Stopwatch()..start();
     final q = query?.trim() ?? '';
     final libs = _extractWrappedList(
       json,
       'libs',
       'lib',
     ).map((e) => LibraryBranch.fromJson(e, isDemo: false)).toList();
-    if (q.isEmpty) return libs;
-    return libs
+    final filtered = q.isEmpty
+        ? libs
+        : libs
         .where((lib) => lib.name.contains(q) || lib.address.contains(q))
         .toList();
+    parse.stop();
+    _logParse(endpoint: 'library-search-map', parseMs: parse.elapsedMilliseconds);
+    return filtered;
   }
 
-  Future<Map<String, dynamic>> _getJson(Uri uri) async {
+  Future<Map<String, dynamic>> _getJson(
+    Uri uri, {
+    required String endpoint,
+    String detail = '',
+  }) async {
+    final total = Stopwatch()..start();
+    final httpWatch = Stopwatch()..start();
     final response = await _client
         .get(uri)
         .timeout(const Duration(seconds: 20));
+    httpWatch.stop();
+    final parseWatch = Stopwatch()..start();
     final decoded = jsonDecode(utf8.decode(response.bodyBytes));
+    parseWatch.stop();
+    total.stop();
+    Data4LibraryPerfLog.request(
+      endpoint: endpoint,
+      httpMs: httpWatch.elapsedMilliseconds,
+      parseMs: parseWatch.elapsedMilliseconds,
+      totalMs: total.elapsedMilliseconds,
+      detail: detail,
+    );
     if (response.statusCode < 200 || response.statusCode >= 300) {
       throw ApiException('API 응답 오류: ${response.statusCode}');
     }
@@ -185,6 +262,20 @@ class Data4LibraryApiClient {
       throw ApiException('${responseBody['error'] ?? responseBody['errCode']}');
     }
     return decoded;
+  }
+
+  void _logParse({required String endpoint, required int parseMs}) {
+    Data4LibraryPerfLog.request(
+      endpoint: endpoint,
+      httpMs: 0,
+      parseMs: parseMs,
+      totalMs: parseMs,
+    );
+  }
+
+  String _safeIsbn(String value) {
+    if (value.length <= 4) return value;
+    return '...${value.substring(value.length - 4)}';
   }
 
   List<Map<String, dynamic>> _extractWrappedList(

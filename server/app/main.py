@@ -4,6 +4,7 @@ from .config import get_settings
 from .database import init_db
 from .api.bestsellers import router as bestsellers_router
 from .api.purchase import router as purchase_router
+from .api.analytics import router as analytics_router
 
 settings = get_settings()
 app = FastAPI(title="K Library Purchase API", version="0.1.0")
@@ -21,3 +22,4 @@ def health():
 
 app.include_router(bestsellers_router)
 app.include_router(purchase_router)
+app.include_router(analytics_router)
