@@ -7,10 +7,12 @@ from sqlalchemy.orm import Session
 
 from ..config import get_settings
 from ..database import get_db
-from ..models.db_models import AnalyticsEvent
+from ..models.db_models import AdminAuditLog, AdminSetting, AnalyticsEvent
 from ..schemas.analytics import AnalyticsBatchIn, AnalyticsBatchOut
 
 router = APIRouter(prefix="/api/v1", tags=["analytics"])
+ANALYTICS_BASELINE_KEY = "analytics_launch_baseline_at"
+_last_delete_at: datetime | None = None
 
 
 @router.post("/analytics/events", response_model=AnalyticsBatchOut)
@@ -78,7 +80,7 @@ def admin_overview(
     db: Session = Depends(get_db),
 ):
     _require_admin(x_admin_token)
-    start, end = _date_window(range, start_date, end_date)
+    start, end = _date_window(db, range, start_date, end_date)
     base = _filtered(db, start, end)
     by_event = _count_by(base, AnalyticsEvent.event_type)
     return {
@@ -103,7 +105,7 @@ def admin_providers(
     db: Session = Depends(get_db),
 ):
     _require_admin(x_admin_token)
-    start, end = _date_window(range, start_date, end_date)
+    start, end = _date_window(db, range, start_date, end_date)
     base = _filtered(db, start, end).filter(
         AnalyticsEvent.event_type.in_(["outbound_store_click", "lowest_price_click"])
     )
@@ -136,7 +138,7 @@ def admin_books(
     db: Session = Depends(get_db),
 ):
     _require_admin(x_admin_token)
-    start, end = _date_window(range, start_date, end_date)
+    start, end = _date_window(db, range, start_date, end_date)
     key = func.coalesce(
         func.nullif(AnalyticsEvent.isbn13, ""),
         func.nullif(AnalyticsEvent.isbn10, ""),
@@ -193,7 +195,7 @@ def admin_funnel(
     db: Session = Depends(get_db),
 ):
     _require_admin(x_admin_token)
-    start, end = _date_window(range, start_date, end_date)
+    start, end = _date_window(db, range, start_date, end_date)
     base = _filtered(db, start, end)
     counts = _count_by(base, AnalyticsEvent.event_type)
     return {
@@ -211,6 +213,105 @@ def admin_funnel(
             },
         ],
         "note": "Counts represent detail entry and external store click behavior, not completed purchases.",
+    }
+
+
+@router.get("/admin/analytics/baseline")
+def admin_get_baseline(
+    x_admin_token: str | None = Header(default=None),
+    db: Session = Depends(get_db),
+):
+    _require_admin(x_admin_token)
+    baseline = _baseline_at(db)
+    return {
+        "baseline_at": baseline.isoformat() if baseline else None,
+        "timezone": "UTC",
+    }
+
+
+@router.put("/admin/analytics/baseline")
+def admin_set_baseline(
+    baseline_at: str | None = None,
+    use_now: bool = False,
+    x_admin_token: str | None = Header(default=None),
+    db: Session = Depends(get_db),
+):
+    _require_admin(x_admin_token)
+    value = datetime.now(timezone.utc) if use_now else _parse_dt(baseline_at)
+    if value is None:
+        raise HTTPException(status_code=400, detail="baseline_at is required")
+    item = db.query(AdminSetting).filter(AdminSetting.key == ANALYTICS_BASELINE_KEY).first()
+    if item is None:
+        item = AdminSetting(key=ANALYTICS_BASELINE_KEY, value=value.isoformat())
+        db.add(item)
+    else:
+        item.value = value.isoformat()
+        item.updated_at = datetime.now(timezone.utc)
+    _audit(db, "analytics_baseline_set", target_before=value, metadata={"source": "admin_api"})
+    db.commit()
+    return {"baseline_at": value.isoformat(), "status": "success"}
+
+
+@router.delete("/admin/analytics/baseline")
+def admin_clear_baseline(
+    x_admin_token: str | None = Header(default=None),
+    db: Session = Depends(get_db),
+):
+    _require_admin(x_admin_token)
+    item = db.query(AdminSetting).filter(AdminSetting.key == ANALYTICS_BASELINE_KEY).first()
+    if item is not None:
+        db.delete(item)
+    _audit(db, "analytics_baseline_cleared", metadata={"source": "admin_api"})
+    db.commit()
+    return {"baseline_at": None, "status": "success"}
+
+
+@router.delete("/admin/analytics/test-data")
+def admin_delete_test_data(
+    mode: str = Query(default="before_baseline"),
+    before: str | None = None,
+    confirm: str = Query(default=""),
+    x_admin_token: str | None = Header(default=None),
+    db: Session = Depends(get_db),
+):
+    global _last_delete_at
+    _require_admin(x_admin_token)
+    now = datetime.now(timezone.utc)
+    if _last_delete_at and (now - _last_delete_at).total_seconds() < 5:
+        raise HTTPException(status_code=429, detail="Too many delete requests")
+    if mode == "all":
+        if confirm != "모든 익명 통계 삭제":
+            raise HTTPException(status_code=400, detail="Invalid confirmation")
+        query = db.query(AnalyticsEvent)
+        target_before = None
+        action = "analytics_all_data_deleted"
+    else:
+        if confirm != "테스트 데이터 삭제":
+            raise HTTPException(status_code=400, detail="Invalid confirmation")
+        target_before = _parse_dt(before) or _baseline_at(db)
+        if target_before is None:
+            raise HTTPException(status_code=400, detail="baseline is required")
+        query = db.query(AnalyticsEvent).filter(AnalyticsEvent.occurred_at < target_before)
+        action = "analytics_test_data_deleted"
+    try:
+        deleted_count = query.delete(synchronize_session=False)
+        _audit(
+            db,
+            action,
+            deleted_count=deleted_count,
+            target_before=target_before,
+            metadata={"mode": mode},
+        )
+        db.commit()
+        _last_delete_at = now
+    except Exception:
+        db.rollback()
+        raise
+    return {
+        "status": "success",
+        "deleted_count": deleted_count,
+        "deleted_before": target_before.isoformat() if target_before else None,
+        "completed_at": datetime.now(timezone.utc).isoformat(),
     }
 
 
@@ -242,21 +343,59 @@ def _sanitize_metadata(metadata: dict) -> dict:
     return {key: value for key, value in metadata.items() if key not in blocked}
 
 
+def _baseline_at(db: Session) -> datetime | None:
+    item = db.query(AdminSetting).filter(AdminSetting.key == ANALYTICS_BASELINE_KEY).first()
+    if item is None or not item.value:
+        return None
+    return _parse_dt(item.value)
+
+
+def _parse_dt(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    text = value.replace("Z", "+00:00")
+    parsed = datetime.fromisoformat(text)
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _audit(
+    db: Session,
+    action: str,
+    *,
+    deleted_count: int | None = None,
+    target_before: datetime | None = None,
+    metadata: dict | None = None,
+) -> None:
+    db.add(
+        AdminAuditLog(
+            action=action,
+            actor="local_admin",
+            deleted_count=deleted_count,
+            target_before=target_before,
+            result="success",
+            audit_metadata=metadata or {},
+        )
+    )
+
+
 def _date_window(
+    db: Session,
     range_name: str,
     start_date: str | None,
     end_date: str | None,
 ) -> tuple[datetime, datetime]:
     if start_date:
-        start = datetime.fromisoformat(start_date).replace(tzinfo=timezone.utc)
-        end = (
-            datetime.fromisoformat(end_date).replace(tzinfo=timezone.utc)
-            if end_date
-            else datetime.now(timezone.utc)
-        )
+        start = _parse_dt(start_date) or datetime.now(timezone.utc)
+        end = _parse_dt(end_date) or datetime.now(timezone.utc)
         return start, end + timedelta(days=1)
 
     now = datetime.now(timezone.utc)
+    if range_name == "all":
+        return datetime(1970, 1, 1, tzinfo=timezone.utc), now
+    if range_name == "post_launch":
+        return _baseline_at(db) or datetime(1970, 1, 1, tzinfo=timezone.utc), now
     today = datetime(now.year, now.month, now.day, tzinfo=timezone.utc)
     if range_name == "today":
         return today, today + timedelta(days=1)

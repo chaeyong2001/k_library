@@ -92,3 +92,23 @@ class AnalyticsEvent(Base):
         Index("ix_kl_analytics_event_type_occurred", "event_type", "occurred_at"),
         Index("ix_kl_analytics_provider_content", "provider", "content_type"),
     )
+
+
+class AdminSetting(Base):
+    __tablename__ = "kl_admin_settings"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    key: Mapped[str] = mapped_column(String(120), unique=True, index=True)
+    value: Mapped[str] = mapped_column(Text, default="")
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+
+
+class AdminAuditLog(Base):
+    __tablename__ = "kl_admin_audit_logs"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    action: Mapped[str] = mapped_column(String(80), index=True)
+    actor: Mapped[str] = mapped_column(String(80), default="local_admin")
+    performed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, index=True)
+    deleted_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    target_before: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    result: Mapped[str] = mapped_column(String(40), default="success")
+    audit_metadata: Mapped[dict] = mapped_column("metadata", JSON().with_variant(JSONB, "postgresql"), default=dict)
