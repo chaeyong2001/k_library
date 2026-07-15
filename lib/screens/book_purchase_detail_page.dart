@@ -21,6 +21,7 @@ class BookPurchaseDetailPage extends StatefulWidget {
     this.publicationDate = '',
     this.sourceProductUrl = '',
     this.contentType = 'physical_book',
+    this.sourceItemId = '',
     this.analytics,
     this.entrySource = '',
     this.sourceScreen = '',
@@ -49,6 +50,7 @@ class BookPurchaseDetailPage extends StatefulWidget {
     publicationDate: book.rankingDate,
     sourceProductUrl: book.productUrl,
     contentType: book.contentType,
+    sourceItemId: book.sourceItemId,
   );
 
   factory BookPurchaseDetailPage.fromBook({
@@ -88,6 +90,7 @@ class BookPurchaseDetailPage extends StatefulWidget {
   final String publicationDate;
   final String sourceProductUrl;
   final String contentType;
+  final String sourceItemId;
   final AnalyticsService? analytics;
   final String entrySource;
   final String sourceScreen;
@@ -175,7 +178,7 @@ class _BookPurchaseDetailPageState extends State<BookPurchaseDetailPage> {
         title: selectedCandidate?.title ?? widget.title,
         author: selectedCandidate?.author ?? widget.author,
         contentType: contentType,
-        sourceItemId: selectedCandidate?.sourceItemId ?? '',
+        sourceItemId: selectedCandidate?.sourceItemId ?? widget.sourceItemId,
       );
       final offers = _sortOffers(result.$1);
       var candidates = const <PurchaseFormatCandidate>[];
@@ -279,6 +282,7 @@ class _BookPurchaseDetailPageState extends State<BookPurchaseDetailPage> {
         contentType: selectedContentType,
         isbn13: widget.isbn13,
         isbn10: widget.isbn10,
+        sourceItemId: widget.sourceItemId,
         title: widget.entrySource == AnalyticsEntrySource.purchaseSearch
             ? ''
             : widget.title,

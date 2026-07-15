@@ -16,6 +16,7 @@ import 'services/loan_alert_service.dart';
 import 'services/purchase_api.dart';
 import 'screens/book_purchase_detail_page.dart';
 import 'screens/bestseller_rank_page.dart';
+import 'screens/purchase_search_results_page.dart';
 import 'storage/local_store.dart';
 
 Future<void> main() async {
@@ -865,89 +866,95 @@ class _SearchPageState extends State<SearchPage> {
 
   @override
   Widget build(BuildContext context) {
-    return ListView(
-      padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
-      children: [
-        SearchBar(
-          controller: controller,
-          hintText: '책 제목, 저자, ISBN 검색',
-          leading: const Icon(Icons.search),
-          trailing: [
-            IconButton(
-              tooltip: '지우기',
-              icon: const Icon(Icons.close),
-              onPressed: () => setState(() {
-                controller.clear();
-                results = const [];
-              }),
+    return Scaffold(
+      appBar: AppBar(title: const Text('도서관 도서 검색')),
+      body: SafeArea(
+        child: ListView(
+          padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
+          children: [
+            SearchBar(
+              controller: controller,
+              hintText: '책 제목, 저자, ISBN 검색',
+              leading: const Icon(Icons.search),
+              trailing: [
+                IconButton(
+                  tooltip: '지우기',
+                  icon: const Icon(Icons.close),
+                  onPressed: () => setState(() {
+                    controller.clear();
+                    results = const [];
+                  }),
+                ),
+              ],
+              onSubmitted: runSearch,
+              onChanged: (value) {
+                timer?.cancel();
+                timer = Timer(
+                  const Duration(milliseconds: 500),
+                  () => runSearch(value),
+                );
+              },
             ),
+            if (widget.state.recentSearches.isNotEmpty) ...[
+              const SizedBox(height: 12),
+              SectionHeader(
+                title: '최근 검색어',
+                action: '전체 삭제',
+                onTap: () async {
+                  await widget.state.store.clearRecentSearches();
+                  await widget.state.reloadLocal();
+                },
+              ),
+              Wrap(
+                spacing: 8,
+                runSpacing: 6,
+                children: widget.state.recentSearches
+                    .map(
+                      (q) => InputChip(
+                        label: Text(q, overflow: TextOverflow.ellipsis),
+                        onPressed: () {
+                          controller.text = q;
+                          runSearch(q);
+                        },
+                        onDeleted: () async {
+                          await widget.state.store.removeRecentSearch(q);
+                          await widget.state.reloadLocal();
+                        },
+                      ),
+                    )
+                    .toList(),
+              ),
+            ],
+            const SizedBox(height: 16),
+            if (searching)
+              const Center(
+                child: Padding(
+                  padding: EdgeInsets.all(24),
+                  child: CircularProgressIndicator(),
+                ),
+              )
+            else if (error != null)
+              StateBox(
+                icon: Icons.error_outline,
+                title: error!,
+                action: '다시 시도',
+                onTap: () => runSearch(controller.text),
+              )
+            else if (controller.text.isNotEmpty && results.isEmpty)
+              const StateBox(icon: Icons.search_off, title: '검색 결과가 없습니다')
+            else
+              ...results.map(
+                (book) => BookTile(
+                  book: book,
+                  state: widget.state,
+                  analyticsEventType: AnalyticsEventType.librarySearchResultOpen,
+                  entrySource: AnalyticsEntrySource.librarySearch,
+                  sourceScreen: 'library_search',
+                ),
+              ),
           ],
-          onSubmitted: runSearch,
-          onChanged: (value) {
-            timer?.cancel();
-            timer = Timer(
-              const Duration(milliseconds: 500),
-              () => runSearch(value),
-            );
-          },
         ),
-        if (widget.state.recentSearches.isNotEmpty) ...[
-          const SizedBox(height: 12),
-          SectionHeader(
-            title: '최근 검색어',
-            action: '전체 삭제',
-            onTap: () async {
-              await widget.state.store.clearRecentSearches();
-              await widget.state.reloadLocal();
-            },
-          ),
-          Wrap(
-            spacing: 8,
-            children: widget.state.recentSearches
-                .map(
-                  (q) => InputChip(
-                    label: Text(q),
-                    onPressed: () {
-                      controller.text = q;
-                      runSearch(q);
-                    },
-                    onDeleted: () async {
-                      await widget.state.store.removeRecentSearch(q);
-                      await widget.state.reloadLocal();
-                    },
-                  ),
-                )
-                .toList(),
-          ),
-        ],
-        const SizedBox(height: 16),
-        if (searching)
-          const Center(
-            child: Padding(
-              padding: EdgeInsets.all(24),
-              child: CircularProgressIndicator(),
-            ),
-          )
-        else if (error != null)
-          StateBox(
-            icon: Icons.error_outline,
-            title: error!,
-            action: '다시 시도',
-            onTap: () => runSearch(controller.text),
-          )
-        else if (controller.text.isNotEmpty && results.isEmpty)
-          const StateBox(icon: Icons.search_off, title: '검색 결과가 없습니다')
-        else
-          ...results.map(
-            (book) => BookTile(
-              book: book,
-              state: widget.state,
-              analyticsEventType: AnalyticsEventType.librarySearchResultOpen,
-              entrySource: AnalyticsEntrySource.librarySearch,
-              sourceScreen: 'library_search',
-            ),
-          ),
-      ],
+      ),
     );
   }
 }
@@ -1987,8 +1994,10 @@ class _PurchasePageState extends State<PurchasePage> {
   bool loading = true;
   bool genreLoading = false;
   bool readerTargetLoading = false;
+  bool purchaseSearchLoading = false;
   String genreMessage = '';
   String readerTargetMessage = '';
+  int _purchaseSearchRequestId = 0;
 
   @override
   void initState() {
@@ -2210,18 +2219,66 @@ class _PurchasePageState extends State<PurchasePage> {
     );
   }
 
-  void _openSearchDetail(String rawValue) {
+  Future<void> _openSearchDetail(String rawValue) async {
     final value = rawValue.trim();
-    if (value.isEmpty) return;
-    final isbn = value.replaceAll(RegExp(r'[^0-9Xx]'), '');
+    if (value.isEmpty || purchaseSearchLoading) return;
+    final isbn = _parsePurchaseIsbn(value);
+    final requestId = ++_purchaseSearchRequestId;
+    setState(() => purchaseSearchLoading = true);
+    if (isbn.$1.isNotEmpty || isbn.$2.isNotEmpty) {
+      try {
+        final response = await widget.state.purchaseApi.searchResults(
+          query: '',
+          isbn13: isbn.$1,
+          isbn10: isbn.$2,
+          contentType: selectedContentType,
+          limit: 20,
+        );
+        if (!mounted || requestId != _purchaseSearchRequestId) return;
+        if (response.$1.length == 1) {
+          _openPurchaseSearchResult(response.$1.single);
+          return;
+        }
+      } catch (_) {
+        if (!mounted || requestId != _purchaseSearchRequestId) return;
+      } finally {
+        if (mounted && requestId == _purchaseSearchRequestId) {
+          setState(() => purchaseSearchLoading = false);
+        }
+      }
+    } else {
+      setState(() => purchaseSearchLoading = false);
+    }
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => PurchaseSearchResultsPage(
+          purchaseApi: widget.state.purchaseApi,
+          links: widget.state.links,
+          analytics: widget.state.analytics,
+          query: value,
+          contentType: selectedContentType,
+          isbn13: isbn.$1,
+          isbn10: isbn.$2,
+        ),
+      ),
+    );
+  }
+
+  void _openPurchaseSearchResult(PurchaseSearchResult result) {
     unawaited(
       widget.state.analytics.track(
         eventType: AnalyticsEventType.purchaseSearchResultOpen,
         entrySource: AnalyticsEntrySource.purchaseSearch,
         sourceScreen: 'purchase_tab',
-        contentType: selectedContentType,
-        isbn13: isbn.length == 13 ? isbn : '',
-        isbn10: isbn.length == 10 ? isbn : '',
+        contentType: result.contentType,
+        provider: result.provider,
+        isbn13: result.isbn13,
+        isbn10: result.isbn10,
+        sourceItemId: result.sourceItemId,
+        title: result.title,
+        author: result.author,
+        displayedPrice: result.price,
+        originalPrice: result.originalPrice,
       ),
     );
     Navigator.of(context).push(
@@ -2232,10 +2289,16 @@ class _PurchasePageState extends State<PurchasePage> {
           analytics: widget.state.analytics,
           entrySource: AnalyticsEntrySource.purchaseSearch,
           sourceScreen: 'purchase_tab',
-          isbn13: isbn.length == 13 ? isbn : '',
-          isbn10: isbn.length == 10 ? isbn : '',
-          title: value,
-          contentType: selectedContentType,
+          isbn13: result.isbn13,
+          isbn10: result.isbn10,
+          title: result.title,
+          author: result.author,
+          publisher: result.publisher,
+          coverUrl: result.coverUrl,
+          publicationDate: result.publicationDate,
+          sourceProductUrl: result.productUrl,
+          contentType: result.contentType,
+          sourceItemId: result.sourceItemId,
         ),
       ),
     );
@@ -2325,11 +2388,21 @@ class _PurchasePageState extends State<PurchasePage> {
           leading: const Icon(Icons.search),
           onSubmitted: _openSearchDetail,
           trailing: [
-            IconButton(
-              onPressed: () => _openSearchDetail(queryController.text),
-              icon: const Icon(Icons.manage_search),
-              tooltip: '구매 옵션 확인',
-            ),
+            if (purchaseSearchLoading)
+              const Padding(
+                padding: EdgeInsets.all(10),
+                child: SizedBox(
+                  width: 20,
+                  height: 20,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
+              )
+            else
+              IconButton(
+                onPressed: () => _openSearchDetail(queryController.text),
+                icon: const Icon(Icons.manage_search),
+                tooltip: '도서 검색',
+              ),
           ],
         ),
         const SizedBox(height: 12),
@@ -2592,6 +2665,34 @@ class _BestsellerBookCard extends StatelessWidget {
       ),
     );
   }
+}
+
+(String, String) _parsePurchaseIsbn(String value) {
+  final cleaned = value.replaceAll(RegExp(r'[^0-9Xx]'), '');
+  if (cleaned.length == 13 && _isValidIsbn13(cleaned)) return (cleaned, '');
+  if (cleaned.length == 10 && _isValidIsbn10(cleaned)) return ('', cleaned);
+  return ('', '');
+}
+
+bool _isValidIsbn13(String value) {
+  if (!RegExp(r'^\d{13}$').hasMatch(value)) return false;
+  var sum = 0;
+  for (var i = 0; i < 12; i++) {
+    sum += int.parse(value[i]) * (i.isEven ? 1 : 3);
+  }
+  final check = (10 - (sum % 10)) % 10;
+  return check == int.parse(value[12]);
+}
+
+bool _isValidIsbn10(String value) {
+  if (!RegExp(r'^\d{9}[0-9Xx]$').hasMatch(value)) return false;
+  var sum = 0;
+  for (var i = 0; i < 10; i++) {
+    final char = value[i].toUpperCase();
+    final digit = char == 'X' ? 10 : int.parse(char);
+    sum += digit * (10 - i);
+  }
+  return sum % 11 == 0;
 }
 
 class _BookCoverPlaceholder extends StatelessWidget {

@@ -102,6 +102,36 @@ class PurchaseApiClient {
     return (offers, '${map['safe_message'] ?? ''}', map['stale'] == true);
   }
 
+  Future<(List<PurchaseSearchResult>, String)> searchResults({
+    String query = '',
+    String isbn13 = '',
+    String isbn10 = '',
+    String contentType = 'physical_book',
+    int limit = 20,
+  }) async {
+    if (!isConfigured) {
+      return (const <PurchaseSearchResult>[], '구매 서버 주소가 설정되지 않았습니다.');
+    }
+    final data = await _get('/api/v1/purchase/search-results', {
+      'q': query,
+      'isbn13': isbn13,
+      'isbn10': isbn10,
+      'content_type': contentType,
+      'limit': '$limit',
+    });
+    final map = Map<String, dynamic>.from(data as Map);
+    final unique = <String, PurchaseSearchResult>{};
+    for (final item in (map['results'] as List? ?? const []).whereType<Map>()) {
+      final result = PurchaseSearchResult.fromJson(
+        Map<String, dynamic>.from(item),
+      );
+      unique.putIfAbsent(result.dedupeKey, () => result);
+    }
+    final results = unique.values.toList()
+      ..sort((a, b) => b.matchScore.compareTo(a.matchScore));
+    return (results, '${map['safe_message'] ?? ''}');
+  }
+
   Future<(List<PurchaseFormatCandidate>, String)> formatCandidates({
     String targetContentType = 'physical_book',
     String title = '',

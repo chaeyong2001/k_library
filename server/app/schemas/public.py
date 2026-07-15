@@ -91,6 +91,31 @@ class FormatCandidateResponse(BaseModel):
     safe_message: str = ""
 
 
+class PurchaseSearchResultOut(BaseModel):
+    provider: str = "aladin"
+    content_type: str = "physical_book"
+    source_item_id: str = ""
+    title: str
+    author: str = ""
+    publisher: str = ""
+    publication_date: str = ""
+    isbn10: str = ""
+    isbn13: str = ""
+    cover_url: str = ""
+    product_url: str = ""
+    price: int | None = None
+    original_price: int | None = None
+    availability: str = "판매처 확인"
+    mall_type: str = ""
+    match_score: float = 0
+
+
+class PurchaseSearchResultResponse(BaseModel):
+    query: dict
+    results: list[PurchaseSearchResultOut]
+    safe_message: str = ""
+
+
 class SourceOut(BaseModel):
     source: str
     label: str

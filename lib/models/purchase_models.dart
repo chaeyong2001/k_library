@@ -226,6 +226,73 @@ class PurchaseFormatCandidate {
       );
 }
 
+class PurchaseSearchResult {
+  const PurchaseSearchResult({
+    required this.provider,
+    required this.contentType,
+    required this.title,
+    this.sourceItemId = '',
+    this.author = '',
+    this.publisher = '',
+    this.publicationDate = '',
+    this.isbn10 = '',
+    this.isbn13 = '',
+    this.coverUrl = '',
+    this.productUrl = '',
+    this.price,
+    this.originalPrice,
+    this.availability = '판매처 확인',
+    this.mallType = '',
+    this.matchScore = 0,
+  });
+
+  final String provider;
+  final String contentType;
+  final String sourceItemId;
+  final String title;
+  final String author;
+  final String publisher;
+  final String publicationDate;
+  final String isbn10;
+  final String isbn13;
+  final String coverUrl;
+  final String productUrl;
+  final int? price;
+  final int? originalPrice;
+  final String availability;
+  final String mallType;
+  final double matchScore;
+
+  String get dedupeKey =>
+      '$contentType:${sourceItemId.isNotEmpty
+          ? sourceItemId
+          : isbn13.isNotEmpty
+          ? isbn13
+          : isbn10.isNotEmpty
+          ? isbn10
+          : '${title.trim().toLowerCase()}:${author.trim().toLowerCase()}:${publisher.trim().toLowerCase()}'}';
+
+  factory PurchaseSearchResult.fromJson(Map<String, dynamic> json) =>
+      PurchaseSearchResult(
+        provider: '${json['provider'] ?? 'aladin'}',
+        contentType: '${json['content_type'] ?? 'physical_book'}',
+        sourceItemId: '${json['source_item_id'] ?? ''}',
+        title: '${json['title'] ?? ''}',
+        author: '${json['author'] ?? ''}',
+        publisher: '${json['publisher'] ?? ''}',
+        publicationDate: '${json['publication_date'] ?? ''}',
+        isbn10: '${json['isbn10'] ?? ''}',
+        isbn13: '${json['isbn13'] ?? ''}',
+        coverUrl: '${json['cover_url'] ?? ''}',
+        productUrl: '${json['product_url'] ?? ''}',
+        price: _int(json['price']),
+        originalPrice: _int(json['original_price']),
+        availability: '${json['availability'] ?? '판매처 확인'}',
+        mallType: '${json['mall_type'] ?? ''}',
+        matchScore: _double(json['match_score']) ?? 0,
+      );
+}
+
 int? _int(Object? value) {
   if (value is int) return value;
   if (value is num) return value.toInt();

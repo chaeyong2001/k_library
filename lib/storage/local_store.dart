@@ -92,7 +92,7 @@ class LocalStore {
     final list = await loadRecentSearches();
     await (await _prefs).setStringList(
       _recentSearchesKey,
-      [trimmed, ...list.where((e) => e != trimmed)].take(20).toList(),
+      [trimmed, ...list.where((e) => e != trimmed)].take(10).toList(),
     );
   }
 

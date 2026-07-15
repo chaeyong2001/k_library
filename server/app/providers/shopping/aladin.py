@@ -135,6 +135,55 @@ class AladinOfferProvider(ShoppingProvider):
         result = sorted(candidates.values(), key=lambda item: item["match_score"], reverse=True)
         return result[:limit]
 
+    async def search_products(
+        self,
+        *,
+        query: str = "",
+        isbn13: str = "",
+        isbn10: str = "",
+        content_type: str = "physical_book",
+        limit: int = 20,
+    ) -> list[dict]:
+        if not self.ttb_key:
+            return []
+        if isbn13 or isbn10:
+            item_id = isbn13 or isbn10
+            data = await self._get(
+                ALADIN_ITEM_LOOKUP,
+                {
+                    "ttbkey": self.ttb_key,
+                    "ItemId": item_id,
+                    "ItemIdType": "ISBN13" if isbn13 else "ISBN",
+                    "output": "js",
+                    "Version": "20131101",
+                },
+            )
+            items = data.get("item", [])
+        else:
+            if not query.strip():
+                return []
+            data = await self._get(
+                ALADIN_ITEM_SEARCH,
+                {
+                    "ttbkey": self.ttb_key,
+                    "Query": query.strip(),
+                    "QueryType": "Keyword",
+                    "SearchTarget": "eBook" if content_type == "ebook" else "Book",
+                    "MaxResults": str(min(max(limit, 1), 50)),
+                    "start": "1",
+                    "output": "js",
+                    "Version": "20131101",
+                },
+            )
+            items = data.get("item", [])
+        results: list[dict] = []
+        for item in items:
+            result = _search_result_from_item(item, query=query, content_type=content_type)
+            if result is not None:
+                results.append(result)
+        results.sort(key=lambda item: item.get("match_score", 0), reverse=True)
+        return _dedupe_search_results(results)[:limit]
+
     async def _get(self, url: str, params: dict[str, str]) -> dict:
         async with httpx.AsyncClient(timeout=self.timeout, follow_redirects=True) as client:
             response = await client.get(url, params=params)
@@ -369,6 +418,79 @@ def _candidate_from_item(
         "match_score": round(max(score, 0), 2),
         "match_reasons": reasons or ["후보 검색 결과"],
     }
+
+
+def _search_result_from_item(item: dict, *, query: str, content_type: str) -> dict | None:
+    title = str(item.get("title") or "")
+    author = str(item.get("author") or "")
+    mall_type = str(item.get("mallType") or "").upper()
+    if content_type == "ebook" and mall_type != "EBOOK":
+        return None
+    if content_type == "physical_book" and mall_type == "EBOOK":
+        return None
+    if not title or _blocked(title, content_type):
+        return None
+    isbn13 = str(item.get("isbn13") or "")
+    isbn10 = str(item.get("isbn") or "")
+    normalized_query = _normalize_title(query)
+    normalized_title = _normalize_title(title)
+    normalized_author = _normalize_author(author)
+    score = 0.0
+    if isbn13 and query.replace("-", "").replace(" ", "") == isbn13:
+        score += 120
+    if isbn10 and query.replace("-", "").replace(" ", "") == isbn10:
+        score += 120
+    if normalized_query and normalized_title == normalized_query:
+        score += 100
+    elif normalized_query and normalized_title.startswith(normalized_query):
+        score += 80
+    elif normalized_query and normalized_query in normalized_title:
+        score += 60
+    if normalized_query and normalized_author and normalized_query in normalized_author:
+        score += 30
+    if item.get("cover"):
+        score += 3
+    if _to_int(item.get("priceSales")) is not None:
+        score += 2
+    return {
+        "provider": "aladin",
+        "content_type": content_type,
+        "source_item_id": str(item.get("itemId") or ""),
+        "title": title,
+        "author": author,
+        "publisher": str(item.get("publisher") or ""),
+        "publication_date": str(item.get("pubDate") or ""),
+        "isbn10": isbn10,
+        "isbn13": isbn13,
+        "cover_url": str(item.get("cover") or ""),
+        "product_url": str(item.get("link") or ""),
+        "price": _to_int(item.get("priceSales")),
+        "original_price": _to_int(item.get("priceStandard")),
+        "availability": "판매처 확인",
+        "mall_type": mall_type,
+        "match_score": round(score, 2),
+    }
+
+
+def _dedupe_search_results(items: list[dict]) -> list[dict]:
+    unique: dict[str, dict] = {}
+    for item in items:
+        key = (
+            item.get("source_item_id")
+            or item.get("isbn13")
+            or item.get("isbn10")
+            or ":".join(
+                [
+                    _normalize_title(str(item.get("title") or "")),
+                    _normalize_author(str(item.get("author") or "")),
+                    _normalize_author(str(item.get("publisher") or "")),
+                    str(item.get("content_type") or ""),
+                ]
+            )
+        )
+        if key and key not in unique:
+            unique[key] = item
+    return list(unique.values())
 
 def _to_int(value) -> int | None:
     try:

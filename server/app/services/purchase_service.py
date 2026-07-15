@@ -140,6 +140,33 @@ class PurchaseService:
         safe_message = "" if candidates else "확인 가능한 후보 도서를 찾지 못했습니다."
         return query_title, normalized_title, candidates[:10], safe_message
 
+    async def search_results(
+        self,
+        *,
+        query: str = "",
+        isbn13: str = "",
+        isbn10: str = "",
+        content_type: str = "physical_book",
+        limit: int = 20,
+    ) -> tuple[list[dict], str]:
+        results: list[dict] = []
+        for entry in self.registry.priced_entries():
+            finder = getattr(entry.provider, "search_products", None)
+            if finder is None:
+                continue
+            results.extend(
+                await finder(
+                    query=query,
+                    isbn13=isbn13,
+                    isbn10=isbn10,
+                    content_type=content_type,
+                    limit=limit,
+                )
+            )
+        results = self._dedupe_search_results(results)
+        results.sort(key=lambda item: item.get("match_score", 0), reverse=True)
+        return results[:limit], "" if results else "검색 조건에 맞는 도서를 찾지 못했습니다."
+
     def _with_meta(self, offers: list[Offer], entry: ShoppingProviderEntry) -> list[Offer]:
         for offer in offers:
             offer.provider = offer.provider or entry.meta.provider_id
@@ -210,4 +237,24 @@ class PurchaseService:
     def _cache_key(self, isbn13: str, isbn10: str, title: str, author: str, content_type: str, source_item_id: str = "") -> str:
         value = source_item_id.strip() or isbn13.strip() or isbn10.strip() or f"{title.strip()} {author.strip()}".strip()
         return f"purchase:{content_type}:aladin:" + " ".join(value.lower().split())
+
+    def _dedupe_search_results(self, results: list[dict]) -> list[dict]:
+        unique: dict[str, dict] = {}
+        for item in results:
+            key = (
+                item.get("source_item_id")
+                or item.get("isbn13")
+                or item.get("isbn10")
+                or ":".join(
+                    [
+                        str(item.get("title") or "").strip().lower(),
+                        str(item.get("author") or "").strip().lower(),
+                        str(item.get("publisher") or "").strip().lower(),
+                        str(item.get("content_type") or ""),
+                    ]
+                )
+            )
+            if key and key not in unique:
+                unique[key] = item
+        return list(unique.values())
 
