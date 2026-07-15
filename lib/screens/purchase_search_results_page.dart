@@ -123,67 +123,47 @@ class _PurchaseSearchResultsPageState extends State<PurchaseSearchResultsPage> {
       appBar: AppBar(title: const Text('도서 검색 결과')),
       body: RefreshIndicator(
         onRefresh: _load,
-        child: CustomScrollView(
+        child: ListView(
           key: PageStorageKey(
             'purchase-search:${widget.contentType}:${widget.query}:${widget.isbn13}:${widget.isbn10}',
           ),
-          slivers: [
-                SliverToBoxAdapter(
-                  child: Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
-                    child: _SearchSummary(
-                      query: widget.query,
-                      formatLabel: _formatLabel,
-                      count: results.length,
-                    ),
-                  ),
-                ),
-                if (loading)
-                  const SliverFillRemaining(
-                    hasScrollBody: false,
-                    child: Center(child: CircularProgressIndicator()),
-                  )
-                else if (results.isEmpty)
-                  SliverFillRemaining(
-                    hasScrollBody: false,
-                    child: _StateBox(
-                      icon: Icons.search_off,
-                      title: '검색 결과가 없습니다',
-                      body: message.isEmpty
-                          ? '검색 조건에 맞는 도서를 찾지 못했습니다.'
-                          : message,
-                      actionLabel: '다시 시도',
-                      onAction: _load,
-                    ),
-                  )
-                else ...[
-                  SliverToBoxAdapter(
-                    child: Padding(
-                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-                      child: Text(
-                        '책 제목이 같은 여러 판본이 있을 수 있으므로 원하는 도서를 선택해 주세요.',
-                        style: Theme.of(context).textTheme.bodySmall,
-                      ),
-                    ),
-                  ),
-                  SliverPadding(
-                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
-                    sliver: SliverList.separated(
-                      itemBuilder: (context, index) {
-                        final item = results[index];
-                        return _ResultCard(
-                          result: item,
-                          formatLabel: _formatLabel,
-                          onSelect: () => _openDetail(item),
-                        );
-                      },
-                      separatorBuilder: (_, _) => const SizedBox(height: 10),
-                      itemCount: results.length,
-                    ),
-                  ),
-                ],
-              ],
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+          children: [
+            _SearchSummary(
+              query: widget.query,
+              formatLabel: _formatLabel,
+              count: results.length,
             ),
+            const SizedBox(height: 8),
+            if (loading)
+              const Padding(
+                padding: EdgeInsets.all(32),
+                child: Center(child: CircularProgressIndicator()),
+              )
+            else if (results.isEmpty)
+              _StateBox(
+                icon: Icons.search_off,
+                title: '검색 결과가 없습니다',
+                body: message.isEmpty ? '검색 조건에 맞는 도서를 찾지 못했습니다.' : message,
+                actionLabel: '다시 시도',
+                onAction: _load,
+              )
+            else ...[
+              Text(
+                '책 제목이 같은 여러 판본이 있을 수 있으므로 원하는 도서를 선택해 주세요.',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+              const SizedBox(height: 8),
+              for (final item in results) ...[
+                _ResultCard(
+                  result: item,
+                  formatLabel: _formatLabel,
+                  onSelect: () => _openDetail(item),
+                ),
+                const SizedBox(height: 10),
+              ],
+            ],
+          ],
         ),
       ),
     );
@@ -307,7 +287,7 @@ class _ResultCard extends StatelessWidget {
                         label: '정가',
                         value: '${_formatWon(result.originalPrice)}원',
                       ),
-                    const Spacer(),
+                    const SizedBox(height: 8),
                     Align(
                       alignment: Alignment.centerRight,
                       child: FilledButton.tonal(

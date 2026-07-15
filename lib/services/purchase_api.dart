@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import '../config/app_config.dart';
 import '../models/purchase_models.dart';
@@ -120,15 +121,24 @@ class PurchaseApiClient {
       'limit': '$limit',
     });
     final map = Map<String, dynamic>.from(data as Map);
+    final rawItems = (map['results'] as List? ?? const []);
     final unique = <String, PurchaseSearchResult>{};
-    for (final item in (map['results'] as List? ?? const []).whereType<Map>()) {
+    var parsedCount = 0;
+    for (final item in rawItems.whereType<Map>()) {
       final result = PurchaseSearchResult.fromJson(
         Map<String, dynamic>.from(item),
       );
+      parsedCount += 1;
       unique.putIfAbsent(result.dedupeKey, () => result);
     }
     final results = unique.values.toList()
       ..sort((a, b) => b.matchScore.compareTo(a.matchScore));
+    if (kDebugMode) {
+      debugPrint(
+        '[PurchaseSearch] raw=${rawItems.length} parsed=$parsedCount '
+        'deduped=${results.length} contentType=$contentType',
+      );
+    }
     return (results, '${map['safe_message'] ?? ''}');
   }
 
